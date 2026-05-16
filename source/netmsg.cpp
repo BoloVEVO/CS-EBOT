@@ -23,27 +23,7 @@
 //
 
 #include "../include/core.h"
-
-inline void RoundEndMessage(void)
-{
-	g_roundEnded = true;
-	g_helicopter = nullptr;
-	for (const auto& bot : g_botManager->m_bots)
-	{
-		if (bot)
-		{
-			bot->m_hasEnemiesNear = false;
-			bot->m_hasFriendsNear = false;
-			bot->m_hasEntitiesNear = false;
-			bot->m_numEnemiesLeft = 0;
-			bot->m_numFriendsLeft = 0;
-			bot->m_isSlowThink = false;
-			bot->m_isEnemyReachable = false;
-			bot->m_isZombieBot = true;
-			bot->m_team = Team::Terrorist;
-		}
-	}
-}
+#include "../include/radio.h"
 
 #define PTR_TO_BYTE(in) *reinterpret_cast<uint8_t*>(in)
 #define PTR_TO_FLT(in) *reinterpret_cast<float*>(in)
@@ -55,6 +35,7 @@ NetworkMsg::NetworkMsg(void)
 	m_message = NETMSG_UNDEFINED;
 	m_state = 0;
 	m_bot = nullptr;
+	m_index = 0;
 
 	for (auto& message : m_registerdMessages)
 		message = NETMSG_UNDEFINED;
@@ -236,10 +217,10 @@ void NetworkMsg::Execute(void* p)
 			}
 			break;
 		}
-		case NETMSG_CURWEAPON:
-		{
-			// this message is sent when a weapon is selected (either by the bot chosing a weapon or by the server auto assigning the bot a weapon). In CS it's also called when Ammo is increased/decreased
-			switch (m_state)
+			case NETMSG_CURWEAPON:
+			{
+				// this message is sent when a weapon is selected (either by the bot chosing a weapon or by the server auto assigning the bot a weapon). In CS it's also called when Ammo is increased/decreased
+				switch (m_state)
 			{
 				case 0:
 				{
@@ -251,23 +232,27 @@ void NetworkMsg::Execute(void* p)
 					id = PTR_TO_INT(p); // weapon ID of current weapon
 					break;
 				}
-				case 2:
-				{
-					if (m_bot)
+					case 2:
 					{
-						if (id >= 0 && id <= Const_MaxWeapons)
+						if (m_bot)
 						{
-							if (state != 0)
-								m_bot->m_currentWeapon = id;
+							if (id >= 0 && id <= Const_MaxWeapons)
+							{
+								if (state != 0)
+									m_bot->m_currentWeapon = id;
 
-							m_bot->m_ammoInClip[id] = PTR_TO_INT(p);
+								m_bot->m_ammoInClip[id] = PTR_TO_INT(p);
+							}
 						}
+
+						if (m_index > 0 && m_index < 33 &&
+							id >= 0 && id <= Const_MaxWeapons && state != 0)
+							g_playerCurrentWeapon[m_index] = id;
+						break;
 					}
-					break;
 				}
+				break;
 			}
-			break;
-		}
 		case NETMSG_AMMOX:
 		{
 			switch (m_state)
@@ -319,12 +304,36 @@ void NetworkMsg::Execute(void* p)
 		}
 		case NETMSG_DEATH:
 		{
-			// this message sends on death
-			if (m_state == 1)
+			static int killerIndex;
+			static int victimIndex;
+
+			if (m_state == 0)
 			{
-				Bot* victimer = g_botManager->GetBot(PTR_TO_INT(p));
+				killerIndex = PTR_TO_INT(p);
+			}
+			else if (m_state == 1)
+			{
+				victimIndex = PTR_TO_INT(p);
+			}
+			else if (m_state == 2)
+			{
+				if (killerIndex == 0 || victimIndex == 0)
+				{
+					killerIndex = 0;
+					victimIndex = 0;
+					break;
+				}
+
+				killerIndex = 0;
+				victimIndex = 0;
+
+
+				RadioClientDied(victimIndex);
+				Bot* victimer = g_botManager->GetBot(victimIndex);
 				if (victimer)
 				{
+					victimer->ClearRadioFollow();
+					victimer->ClearRadioHoldPosition();
 					victimer->m_isAlive = false;
 					victimer->m_navNode.Clear();
 					victimer->m_currentGoalIndex = -1;

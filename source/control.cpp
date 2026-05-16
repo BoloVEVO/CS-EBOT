@@ -263,7 +263,7 @@ Bot* BotControl::GetBot(edict_t* ent)
 void BotControl::Think(void)
 {
 	const float time2 = engine->GetTime();
-	for (Bot* const &bot : m_bots)
+	for (Bot* const& bot : m_bots)
 	{
 		if (bot && bot->m_updateTimer < time2)
 		{
@@ -374,7 +374,7 @@ void BotControl::AddBot(char name[32], const int skill, const int personality, c
 		ebot_quota.SetInt(botsNum);
 }
 
-int BotControl::AddBotAPI(char name[32], const int skill,const  int team)
+int BotControl::AddBotAPI(char name[32], const int skill, const  int team)
 {
 	const int botsNum = GetBotsNum() + 1;
 	if (botsNum > ebot_quota.GetInt())
@@ -585,34 +585,34 @@ void BotControl::RemoveMenu(edict_t* ent, const int selection)
 
 	switch (selection)
 	{
-		case 1:
-		{
-			g_menus[14].validSlots = validSlots & static_cast<unsigned int>(-1);
-			g_menus[14].menuText = tempBuffer;
-			DisplayMenuToClient(ent, &g_menus[14]);
-			break;
-		}
-		case 2:
-		{
-			g_menus[15].validSlots = validSlots & static_cast<unsigned int>(-1);
-			g_menus[15].menuText = tempBuffer;
-			DisplayMenuToClient(ent, &g_menus[15]);
-			break;
-		}
-		case 3:
-		{
-			g_menus[16].validSlots = validSlots & static_cast<unsigned int>(-1);
-			g_menus[16].menuText = tempBuffer;
-			DisplayMenuToClient(ent, &g_menus[16]);
-			break;
-		}
-		case 4:
-		{
-			g_menus[17].validSlots = validSlots & static_cast<unsigned int>(-1);
-			g_menus[17].menuText = tempBuffer;
-			DisplayMenuToClient(ent, &g_menus[17]);
-			break;
-		}
+	case 1:
+	{
+		g_menus[14].validSlots = validSlots & static_cast<unsigned int>(-1);
+		g_menus[14].menuText = tempBuffer;
+		DisplayMenuToClient(ent, &g_menus[14]);
+		break;
+	}
+	case 2:
+	{
+		g_menus[15].validSlots = validSlots & static_cast<unsigned int>(-1);
+		g_menus[15].menuText = tempBuffer;
+		DisplayMenuToClient(ent, &g_menus[15]);
+		break;
+	}
+	case 3:
+	{
+		g_menus[16].validSlots = validSlots & static_cast<unsigned int>(-1);
+		g_menus[16].menuText = tempBuffer;
+		DisplayMenuToClient(ent, &g_menus[16]);
+		break;
+	}
+	case 4:
+	{
+		g_menus[17].validSlots = validSlots & static_cast<unsigned int>(-1);
+		g_menus[17].menuText = tempBuffer;
+		DisplayMenuToClient(ent, &g_menus[17]);
+		break;
+	}
 	}
 }
 
@@ -621,7 +621,7 @@ void BotControl::KillAll(const int team)
 {
 	const bool filterByTeam = (team == Team::Terrorist || team == Team::Counter);
 
-	for (const auto &bot : m_bots)
+	for (const auto& bot : m_bots)
 	{
 		if (bot)
 		{
@@ -638,7 +638,7 @@ void BotControl::KillAll(const int team)
 // this function removes random bot from server (only ebots)
 void BotControl::RemoveRandom(void)
 {
-	for (const auto &bot : m_bots)
+	for (const auto& bot : m_bots)
 	{
 		if (bot) // is this slot used?
 		{
@@ -654,7 +654,7 @@ void BotControl::ListBots(void)
 	ServerPrintNoTag("%-3.5s %-9.13s %-17.18s %-3.4s %-3.4s %-3.4s", "index", "name", "personality", "team", "skill", "frags");
 
 	edict_t* player;
-	for (const auto &client : g_clients)
+	for (const auto& client : g_clients)
 	{
 		if (FNullEnt(client.ent))
 			continue;
@@ -698,7 +698,7 @@ int BotControl::GetHumansNum(void)
 			continue;
 
 		if (m_bots[i])
-			continue;		
+			continue;
 
 		if (client.ent->v.flags & FL_PROXY)
 			continue;
@@ -814,18 +814,18 @@ Bot::Bot(edict_t* bot, const int skill, const int personality, const int team, c
 
 	switch (personality)
 	{
-		case 1:
-		{
-			m_personality = Personality::Rusher;
-			break;
-		}
-		case 2:
-		{
-			m_personality = Personality::Careful;
-			break;
-		}
-		default:
-			m_personality = Personality::Normal;
+	case 1:
+	{
+		m_personality = Personality::Rusher;
+		break;
+	}
+	case 2:
+	{
+		m_personality = Personality::Careful;
+		break;
+	}
+	default:
+		m_personality = Personality::Normal;
 	}
 
 	cmemset(&m_ammoInClip, 1, sizeof(m_ammoInClip));
@@ -839,7 +839,7 @@ Bot::Bot(edict_t* bot, const int skill, const int personality, const int team, c
 	m_zhCampPointIndex = -1;
 	m_myMeshWaypoint = -1;
 
-	NewRound();
+	BotSpawned();
 	g_fakeCommandTimer = engine->GetTime() + 1.0f;
 }
 
@@ -876,14 +876,16 @@ Bot::~Bot(void)
 	}
 }
 
-// this function initializes a bot after creation & at the start of each round
-void Bot::NewRound(void)
+// this function initializes a bot after creation & at the start of each round & and at respawn
+void Bot::BotSpawned(void)
 {
 	// clear all allocated path nodes
 	m_navNode.Clear();
 	m_currentGoalIndex = -1;
 	m_currentWaypointIndex = -1;
 	m_destOrigin = pev ? pev->origin : nullvec;
+	ClearRadioFollow();
+	ClearRadioHoldPosition();
 
 	m_team = GetTeam(m_myself);
 	m_isAlive = IsAlive(m_myself);
@@ -892,16 +894,21 @@ void Bot::NewRound(void)
 	m_skipHumanCampThisRound = !m_isZombieBot &&
 		(m_personality == Personality::Rusher) &&
 		(crandomfloat(0.0f, 100.0f) < noCampPercent);
+
 	if (!m_isAlive) // if bot died, clear all weapon stuff and force buying again
 	{
 		cmemset(&m_ammoInClip, 0, sizeof(m_ammoInClip));
 		cmemset(&m_ammo, 0, sizeof(m_ammo));
-		m_currentWeapon = 0;
+		m_currentWeapon = 0;;
 	}
 
 	m_numSpawns++;
 	m_sidePreference = crandomfloat(-1.0f, 1.0f);
 	const float time2 = engine->GetTime();
+	m_healthMultiplierTime = 0.0f;
+
+	if (m_isZombieBot)
+		ScheduleHealthMultiplier();
 
 	// initialize msec value
 	m_aimInterval = time2;
@@ -912,14 +919,18 @@ void Bot::NewRound(void)
 	m_rememberedProcess = Process::Default;
 	m_rememberedProcessTime = 0.0f;
 
+	m_zhCampPointIndex = -1;
 	m_myMeshWaypoint = -1;
 	m_waitForLeaveWaypoint = false;
 
 	m_hasEnemiesNear = false;
 	m_hasEntitiesNear = false;
 	m_hasFriendsNear = false;
-
-	m_infectDelayTime = 0.0f;
+	m_isEnemyReachable = false;
+	m_enemyDistance = 999999.0f;
+	m_nearestEnemy = nullptr;
+	m_enemyOrigin = nullvec;
+	m_enemySeeTime = 0.0f;
 
 	m_prevTravelFlags = 0;
 	m_currentTravelFlags = 0;
@@ -930,8 +941,7 @@ void Bot::NewRound(void)
 	m_prevWptIndex[3] = -1;
 
 	m_breakableEntity = nullptr;
-	m_touchBlockOrigin = nullvec;
-	m_touchBlockTime = 0.0f;
+	m_breakableJumpTime = 0.0f;
 	m_buttonEntity = nullptr;
 	m_timeDoorOpen = 0.0f;
 
@@ -942,6 +952,13 @@ void Bot::NewRound(void)
 	m_wpnTimer = 0.0f;
 	m_randomReloadTimer = 0.0f;
 	m_jumpTime = 0.0f;
+	m_ladderJumpNoInputStartTime = 0.0f;
+	m_ladderJumpNoInputTime = 0.0f;
+	m_ladderJumpRetryDeadline = 0.0f;
+	m_ladderJumpRetrySource = -1;
+	m_ladderJumpRetryTarget = -1;
+	m_ladderJumpInitialPressUsed = false;
+	m_ladderGroundStartTime = 0.0f;
 	m_duckTime = 0.0f;
 	m_doubleJumpPending = false;
 	m_doubleJumpTime = 0.0f;
@@ -961,6 +978,7 @@ void Bot::NewRound(void)
 	m_waypointTime = engine->GetTime() + 0.5f;
 	IgnoreCollisionShortly();
 }
+
 
 // this function kills a bot (not just using ClientKill, but like the CSBot does)
 // base code courtesy of Lazy (from bots-united forums!)

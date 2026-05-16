@@ -33,7 +33,6 @@
 
 ConVar ebot_analyze_distance("ebot_analyze_grid_distance", "40");
 ConVar ebot_analyze_max_jump_height("ebot_analyze_max_jump_height", "62");
-ConVar ebot_max_jump_height("ebot_max_jump_height", "-1"); //should be 65, but many maps has bad waypoints
 ConVar ebot_human_double_jump("ebot_human_double_jump", "0");
 ConVar ebot_zombie_double_jump("ebot_zombie_double_jump", "0");
 ConVar ebot_analyze_auto_start("ebot_analyze_auto_start", "1");
@@ -116,6 +115,7 @@ void Waypoint::Initialize(void)
 	m_distMatrix.Destroy();
 	g_numWaypoints = 0;
 	m_lastWaypoint = nullvec;
+	ClearLastCreatedPath();
 }
 
 inline bool CheckCrouchRequirement(const Vector& TargetPosition)
@@ -1985,6 +1985,8 @@ void Waypoint::DeleteByIndex(const int16_t index)
 	if (!IsValidWaypoint(index))
 		return;
 
+	ClearLastCreatedPath();
+
 	Path* path = nullptr;
 
 	int16_t i, j;
@@ -2211,12 +2213,11 @@ void Waypoint::CreateWaypointPath(const PathConnection dir)
 		return;
 	}
 
-	int16_t nodeTo = m_facingAtIndex;
+	int16_t nodeTo = m_cacheWaypointIndex;
 	if (!IsValidWaypoint(nodeTo))
 	{
-		if (IsValidWaypoint(m_cacheWaypointIndex))
-			nodeTo = m_cacheWaypointIndex;
-		else
+		nodeTo = m_facingAtIndex;
+		if (!IsValidWaypoint(nodeTo))
 		{
 			CenterPrint("Unable to find destination waypoint");
 			return;
@@ -2229,25 +2230,64 @@ void Waypoint::CreateWaypointPath(const PathConnection dir)
 		return;
 	}
 
+	const bool wasForwardConnected = IsConnected(nodeFrom, nodeTo);
+	const bool wasReverseConnected = IsConnected(nodeTo, nodeFrom);
+	bool checkForwardCreated = false;
+	bool checkReverseCreated = false;
+
 	if (dir == PATHCON_OUTGOING)
+	{
 		AddPath(nodeFrom, nodeTo);
+		checkForwardCreated = true;
+	}
 	else if (dir == PATHCON_INCOMING)
+	{
 		AddPath(nodeTo, nodeFrom);
+		checkReverseCreated = true;
+	}
 	else if (dir == PATHCON_JUMPING)
+	{
 		AddPath(nodeFrom, nodeTo, 1);
+		checkForwardCreated = true;
+	}
 	else if (dir == PATHCON_JUMP_OUTGOING)
 	{
 		AddPath(nodeFrom, nodeTo, 1);
 		AddPath(nodeTo, nodeFrom);
+		checkForwardCreated = true;
+		checkReverseCreated = true;
 	}
 	else if (dir == PATHCON_BOOSTING)
+	{
 		AddPath(nodeFrom, nodeTo, 2);
+		checkForwardCreated = true;
+	}
 	else if (dir == PATHCON_VISIBLE)
+	{
 		AddPath(nodeFrom, nodeTo, 3);
+		checkForwardCreated = true;
+	}
 	else
 	{
 		AddPath(nodeFrom, nodeTo);
 		AddPath(nodeTo, nodeFrom);
+		checkForwardCreated = true;
+		checkReverseCreated = true;
+	}
+
+	const bool createdForward = checkForwardCreated && !wasForwardConnected && IsConnected(nodeFrom, nodeTo);
+	const bool createdReverse = checkReverseCreated && !wasReverseConnected && IsConnected(nodeTo, nodeFrom);
+	if (createdForward)
+	{
+		m_lastCreatedPathFrom = nodeFrom;
+		m_lastCreatedPathTo = nodeTo;
+		m_lastCreatedPathBothWays = createdReverse;
+	}
+	else if (createdReverse)
+	{
+		m_lastCreatedPathFrom = nodeTo;
+		m_lastCreatedPathTo = nodeFrom;
+		m_lastCreatedPathBothWays = false;
 	}
 
 	PlaySound(g_hostEntity, "common/wpn_hudon.wav");
@@ -2273,12 +2313,11 @@ void Waypoint::DeletePath(void)
 		return;
 	}
 
-	int16_t nodeTo = m_facingAtIndex;
+	int16_t nodeTo = m_cacheWaypointIndex;
 	if (!IsValidWaypoint(nodeTo))
 	{
-		if (IsValidWaypoint(m_cacheWaypointIndex))
-			nodeTo = m_cacheWaypointIndex;
-		else
+		nodeTo = m_facingAtIndex;
+		if (!IsValidWaypoint(nodeTo))
 		{
 			CenterPrint("Unable to find destination waypoint");
 			return;
@@ -2361,8 +2400,87 @@ void Waypoint::DeletePathByIndex(int16_t nodeFrom, int16_t nodeTo)
 	CenterPrint("There is already no path on this waypoint");
 }
 
+bool Waypoint::DeletePathByIndexExact(int16_t nodeFrom, int16_t nodeTo)
+{
+	if (!IsValidWaypoint(nodeFrom) || !IsValidWaypoint(nodeTo))
+		return false;
+
+	for (int16_t index = 0; index < Const_MaxPathIndex; index++)
+	{
+		if (m_paths[nodeFrom].index[index] == nodeTo)
+		{
+			m_paths[nodeFrom].index[index] = -1;
+			m_paths[nodeFrom].connectionFlags[index] = 0;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+void Waypoint::ClearLastCreatedPath(void)
+{
+	m_lastCreatedPathFrom = -1;
+	m_lastCreatedPathTo = -1;
+	m_lastCreatedPathBothWays = false;
+}
+
+bool Waypoint::GetLastCreatedPath(int16_t* nodeFrom, int16_t* nodeTo)
+{
+	if (!IsValidWaypoint(m_lastCreatedPathFrom) || !IsValidWaypoint(m_lastCreatedPathTo))
+		return false;
+
+	const bool hasForwardPath = IsConnected(m_lastCreatedPathFrom, m_lastCreatedPathTo);
+	const bool hasReversePath = m_lastCreatedPathBothWays && IsConnected(m_lastCreatedPathTo, m_lastCreatedPathFrom);
+	if (!hasForwardPath && !hasReversePath)
+		return false;
+
+	if (nodeFrom)
+		*nodeFrom = m_lastCreatedPathFrom;
+
+	if (nodeTo)
+		*nodeTo = m_lastCreatedPathTo;
+
+	return true;
+}
+
+void Waypoint::DeleteLastCreatedPath(void)
+{
+	int16_t nodeFrom = -1;
+	int16_t nodeTo = -1;
+	if (!GetLastCreatedPath(&nodeFrom, &nodeTo))
+	{
+		ClearLastCreatedPath();
+		CenterPrint("No last created path to delete");
+		return;
+	}
+
+	bool deletedPath = DeletePathByIndexExact(nodeFrom, nodeTo);
+	if (m_lastCreatedPathBothWays)
+		deletedPath = DeletePathByIndexExact(nodeTo, nodeFrom) || deletedPath;
+
+	if (!deletedPath)
+	{
+		ClearLastCreatedPath();
+		CenterPrint("No last created path to delete");
+		return;
+	}
+
+	g_waypointsChanged = true;
+	ClearLastCreatedPath();
+	PlaySound(g_hostEntity, "weapons/mine_activate.wav");
+	CenterPrint("Deleted last created path %d -> %d", nodeFrom, nodeTo);
+}
+
 void Waypoint::CacheWaypoint(void)
 {
+	if (IsValidWaypoint(m_cacheWaypointIndex))
+	{
+		m_cacheWaypointIndex = -1;
+		CenterPrint("Cached waypoint cleared");
+		return;
+	}
+
 	const int16_t node = FindNearestSlow(GetEntityOrigin(g_hostEntity), 75.0f);
 	if (!IsValidWaypoint(node))
 	{
@@ -3616,7 +3734,7 @@ char* Waypoint::GetWaypointInfo(const int16_t id)
 		}
 	}
 	
-	snprintf(messageBuffer, sizeof(messageBuffer), "%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s", 
+		snprintf(messageBuffer, sizeof(messageBuffer), "%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
 		(!path->flags && !jumpPoint) ? "(none)" : "", 
 		path->flags & WAYPOINT_LIFT ? "LIFT " : "", 
 		path->flags & WAYPOINT_CROUCH ? "CROUCH " : "", 
@@ -3637,12 +3755,14 @@ char* Waypoint::GetWaypointInfo(const int16_t id)
 		path->flags & WAYPOINT_HMCAMPMESH ? "HUMAN MESH " : "",
 		path->flags & WAYPOINT_ZOMBIEONLY ? "ZOMBIE ONLY " : "",
 		path->flags & WAYPOINT_HUMANONLY ? "HUMAN ONLY " : "",
-		path->flags & WAYPOINT_ZOMBIEPUSH ? "ZOMBIE PUSH " : "",
-		path->flags & WAYPOINT_FALLRISK ? "FALL RISK " : "",
-		path->flags & WAYPOINT_SPECIFICGRAVITY ? "SPECIFIC GRAVITY " : "",
-		path->flags & WAYPOINT_WAITUNTIL ? "WAIT UNTIL GROUND " : "",
-		path->flags & WAYPOINT_HELICOPTER ? "HELICOPTER " : "",
-		path->flags & WAYPOINT_ONLYONE ? "ONLY ONE BOT " : "");
+			path->flags & WAYPOINT_ZOMBIEPUSH ? "ZOMBIE PUSH " : "",
+			path->flags & WAYPOINT_FALLRISK ? "FALL RISK " : "",
+			path->flags & WAYPOINT_SPECIFICGRAVITY ? "SPECIFIC GRAVITY " : "",
+			path->flags & WAYPOINT_LEAVE ? "LEAVE " : "",
+			path->flags & WAYPOINT_WAIT ? "WAIT " : "",
+			path->flags & WAYPOINT_WAITUNTIL ? "WAIT UNTIL GROUND " : "",
+			path->flags & WAYPOINT_HELICOPTER ? "HELICOPTER " : "",
+			path->flags & WAYPOINT_ONLYONE ? "ONLY ONE BOT " : "");
 
 	// return the message buffer
 	return messageBuffer;

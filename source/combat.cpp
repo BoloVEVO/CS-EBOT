@@ -134,10 +134,11 @@ void Bot::FindFriendsAndEnemiens(void)
 	{
 		bool needTarget = (!IsAlive(m_nearestEnemy) || GetTeam(m_nearestEnemy) == m_team);
 		edict_t* randomEnemy = nullptr;
-		if (needTarget)
+		const int randomTargetPercent = cclamp(ebot_zombie_random_target_percent.GetInt(), 0, 100);
+
+		if (needTarget && randomTargetPercent > 0)
 		{
-			const int randomTargetPercent = cclamp(ebot_zombie_random_target_percent.GetInt(), 0, 100);
-			if (randomTargetPercent > 0 && chanceof(randomTargetPercent))
+			if (chanceof(randomTargetPercent))
 			{
 				int randomEnemyIndexes[32];
 				int randomEnemyCount = 0;
@@ -154,6 +155,9 @@ void Bot::FindFriendsAndEnemiens(void)
 						continue;
 
 					if (randomClient.ent == m_myself)
+						continue;
+
+					if (randomClient.index == m_index)
 						continue;
 
 					if (!IsAlive(randomClient.ent))
@@ -370,10 +374,11 @@ void Bot::FindEnemyEntities(void)
 {
 	m_numEntitiesLeft = 0;
 	m_hasEntitiesNear = false;
+	m_nearestEntity = nullptr;
+	m_entityOrigin = nullvec;
 	if (g_roundEnded)
 	{
 		m_entityDistance = -1.0f;
-		m_nearestEntity = nullptr;
 		return;
 	}
 	m_entityDistance = 999999.0f;
@@ -382,27 +387,32 @@ void Bot::FindEnemyEntities(void)
 	Vector origin;
 	float distance;
 	edict_t* entity;
-	TraceResult tr{};
 	const Vector myOrigin = EyePosition();
+	const float maxTargetDistance = ebot_human_target_max_distance.GetFloat();
+	const bool limitHumanTargets = !m_isZombieBot && maxTargetDistance >= 0.0f;
+	const float maxTargetDistanceSq = squaredf(maxTargetDistance);
 
 	for (i = 0; i < g_entities.Size(); i++)
 	{
-		entity = INDEXENT(g_entities[i]);
+		const EnemyEntityEntry& enemyEntity = g_entities.Get(i);
+		const int requiredTarget = m_isZombieBot ? EnemyEntityTarget_ZombieBots : EnemyEntityTarget_HumanBots;
+		if (!(enemyEntity.targetMask & requiredTarget))
+			continue;
+
+		entity = INDEXENT(enemyEntity.index);
 		if (!IsAlive(entity) || entity->v.flags & FL_NOTARGET || entity->v.effects & EF_NODRAW || entity->v.takedamage == DAMAGE_NO)
 			continue;
 
 		m_numEntitiesLeft++;
 		origin = GetBoxOrigin(entity);
 		distance = (myOrigin - origin).GetLengthSquared();
+		if (limitHumanTargets && distance > maxTargetDistanceSq)
+			continue;
+
 		if (distance < m_entityDistance)
 		{
-			// simple check		
-			TraceLine(myOrigin, origin, TraceIgnore::Everything, m_myself, &tr);
-			if (tr.flFraction < 1.0f)
-			{
-				if (!FNullEnt(tr.pHit) && tr.pHit != entity)
-					continue;
-			}
+			if (!CheckEntityVisibility(entity))
+				continue;
 
 			m_entityDistance = distance;
 			m_nearestEntity = entity;
@@ -674,6 +684,8 @@ int Bot::CheckGrenades(void)
 		return Weapon::HeGrenade;
 	else if (pev->weapons & (1 << Weapon::FbGrenade))
 		return Weapon::FbGrenade;
+	else if (pev->weapons & (1 << Weapon::SmGrenade))
+		return Weapon::SmGrenade;
 	return -1;
 }
 

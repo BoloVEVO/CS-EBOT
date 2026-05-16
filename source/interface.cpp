@@ -23,6 +23,7 @@
 //
 
 #include "../include/core.h"
+#include "../include/radio.h"
 
 // console vars
 ConVar ebot_password("ebot_password", "ebot", VARTYPE_PASSWORD);
@@ -34,9 +35,41 @@ ConVar ebot_showwp("ebot_show_waypoints", "0");
 ConVar ebot_analyze_create_goal_waypoints("ebot_analyze_starter_waypoints", "1");
 ConVar ebot_running_on_xash("ebot_running_on_xash", "0");
 
-extern ConVar ebot_delay_after_infected;
-
 static float secondTimer{0.0f};
+
+static bool IsRoundEndAlertMessage(const char* message)
+{
+	if (IsNullString(message))
+		return false;
+
+	return !cstrncmp(message, "#CTs_Win", 9) ||
+		!cstrncmp(message, "#Terrorists_Win", 16) ||
+		!cstrncmp(message, "#Round_Draw", 12) ||
+		!cstrncmp(message, "#Game_Commencing", 17) ||
+		!cstrncmp(message, "#Game_will_restart_in", 22) ||
+		cstrstr(const_cast<char*>(message), const_cast<char*>("Round_End")) != nullptr ||
+		cstrstr(const_cast<char*>(message), const_cast<char*>("Game_Commencing")) != nullptr ||
+		cstrstr(const_cast<char*>(message), const_cast<char*>("Game_will_restart_in")) != nullptr;
+}
+
+static void AlertMessage_Hook(ALERT_TYPE /*atype*/, char* szFmt, ...)
+{
+	if (!IsNullString(szFmt))
+	{
+		char buffer[1024];
+		va_list ap;
+		va_start(ap, szFmt);
+		vsnprintf(buffer, sizeof(buffer), szFmt, ap);
+		va_end(ap);
+		buffer[sizeof(buffer) - 1] = '\0';
+
+		if (IsRoundEndAlertMessage(buffer))
+			RoundEndMessage();
+	}
+
+	RETURN_META(MRES_IGNORED);
+}
+
 void ebotVersionMSG(edict_t* entity = nullptr)
 {
 	constexpr int buildVersion[4] = { PRODUCT_VERSION_DWORD };
@@ -891,7 +924,7 @@ int Spawn_Post(edict_t* ent)
 	// reset bot
 	Bot* bot = g_botManager->GetBot(ent);
 	if (bot)
-		bot->NewRound();
+		bot->BotSpawned();
 
 	RETURN_META_VALUE(MRES_IGNORED, 0);
 }
@@ -962,6 +995,9 @@ void ClientDisconnect(edict_t* ent)
 	// listen server client disconnects, and we don't want to send him any sort of message then.
 
 	const int clientIndex = ENTINDEX(ent) - 1;
+	if (clientIndex >= 0 && clientIndex + 1 < 33)
+		g_playerCurrentWeapon[clientIndex + 1] = 0;
+	RadioClientDisconnected(ent);
 
 	// check if its a bot
 	Bot* bot = g_botManager->GetBot(clientIndex);
@@ -1031,6 +1067,8 @@ void ClientCommand(edict_t* ent)
 	const char* command = CMD_ARGV(0);
 	const char* arg1 = CMD_ARGV(1);
 	const bool hasControlAccess = (ent == g_hostEntity || (g_clients[clientIndex].flags & CFLAG_OWNER));
+
+	RadioClientCommand(ent, command, arg1);
 
 		if (!g_isFakeCommand && !cstricmp(command, "ebot"))
 		{
@@ -1760,6 +1798,12 @@ void ClientCommand(edict_t* ent)
 						reopenWaypointMenu = true;
 						break;
 					}
+					case 8:
+					{
+						g_waypoint->DeleteLastCreatedPath();
+						reopenWaypointMenu = true;
+						break;
+					}
 					case 10:
 					{
 						client->wpMenuBack = nullptr;
@@ -2116,12 +2160,15 @@ void ServerActivate(edict_t* pentEdictList, int edictCount, int clientMax)
 	// loading the bot profiles, and drawing the world map (ie, filling the navigation hashtable).
 	// Once this function has been called, the server can be considered as "running".
 
+	g_maxClients = clientMax;
+
 	// initialize all config files
 	InitConfig();
 
 	// Reset runtime autopath distance on every map load.
 	// This prevents disabled autopath (0) from leaking into the next map.
 	g_autoPathDistance = 160.0f;
+	SemiclipReset();
 
 	// do level initialization stuff here...
 	g_waypoint->Initialize();
@@ -2132,6 +2179,7 @@ void ServerActivate(edict_t* pentEdictList, int edictCount, int clientMax)
 	ServerCommand("exec addons/ebot/maps/%s.cfg", GetMapName());
 
 	g_botManager->InitQuota();
+	RadioResetAll();
 
 	secondTimer = 0.0f;
 	g_fakeCommandTimer = 0.0f;
@@ -2161,9 +2209,12 @@ void ServerDeactivate(void)
 	g_fakeCommandTimer = 0.0f;
 	g_isFakeCommand = false;
 	g_waypointOn = false;
+	RadioResetAll();
 
 	if (g_gameVersion & Game::Xash)
 		g_botManager->RemoveAll();
+
+	UnregisterBreakableDamageHooks();
 
 	RETURN_META(MRES_IGNORED);
 }
@@ -2291,6 +2342,7 @@ inline void JustAStuff(void)
 
 inline void FrameThread(void)
 {
+	TryRegisterBreakableDamageHooks();
 	LoadEntityData();
 	g_botManager->SlowFrameCheck();
 	JustAStuff();
@@ -2337,6 +2389,7 @@ void StartFrame_Post(void)
 	// during the game, for example making the bots think (yes, because no Think() function exists
 	// for the bots by the MOD side, remember).  Post version called only by metamod.
 
+	RadioUpdate();
 	g_botManager->Think();
 	RETURN_META(MRES_IGNORED);
 }
@@ -2412,6 +2465,7 @@ exportc int GetEntityAPI2(DLL_FUNCTIONS* functionTable, int* /*interfaceVersion*
 	// functions this time (to use in the bot code).
 
 	cmemset(functionTable, 0, sizeof(DLL_FUNCTIONS));
+	SemiclipSetPreHookTable(functionTable);
 	functionTable->pfnGameInit = GameDLLInit;
 	functionTable->pfnSpawn = Spawn;
 	functionTable->pfnClientConnect = ClientConnect;
@@ -2439,6 +2493,7 @@ exportc int GetEntityAPI2_Post(DLL_FUNCTIONS* functionTable, int* /*interfaceVer
 	// functions this time (to use in the bot code). Post version, called only by metamod.
 
 	cmemset(functionTable, 0, sizeof(DLL_FUNCTIONS));
+	SemiclipSetPostHookTable(functionTable);
 	functionTable->pfnSpawn = Spawn_Post;
 	functionTable->pfnStartFrame = StartFrame_Post;
 	functionTable->pfnGameInit = GameDLLInit_Post;
@@ -2449,6 +2504,8 @@ exportc int GetEntityAPI2_Post(DLL_FUNCTIONS* functionTable, int* /*interfaceVer
 exportc int GetEngineFunctions(enginefuncs_t* functionTable, int* /*interfaceVersion*/)
 {
 	cmemset(functionTable, 0, sizeof(enginefuncs_t));
+
+	functionTable->pfnAlertMessage = AlertMessage_Hook;
 
 	functionTable->pfnMessageBegin = [](int msgDest, int msgType, const float* origin, edict_t* ed)
 	{
@@ -2483,7 +2540,8 @@ exportc int GetEngineFunctions(enginefuncs_t* functionTable, int* /*interfaceVer
 			{
 				//g_netMsg->HandleMessageIfRequired (msgType, NETMSG_SCOREINFO);
 				g_netMsg->HandleMessageIfRequired(msgType, NETMSG_DEATH);
-				g_netMsg->HandleMessageIfRequired(msgType, NETMSG_TEXTMSG);
+			//	g_netMsg->HandleMessageIfRequired(msgType, NETMSG_TEXTMSG);
+				
 
 				if (msgType == SVC_INTERMISSION)
 				{
@@ -2503,13 +2561,17 @@ exportc int GetEngineFunctions(enginefuncs_t* functionTable, int* /*interfaceVer
 					}
 				}
 			}
-			else
-			{
-				Bot* bot = g_botManager->GetBot(ed);
-
-				// is this message for a bot?
-				if (bot && bot->m_myself == ed)
+				else
 				{
+					const int playerIndex = ENTINDEX(ed);
+					if (playerIndex > 0 && playerIndex < 33)
+						g_netMsg->SetPlayerIndex(playerIndex);
+
+					Bot* bot = g_botManager->GetBot(ed);
+
+					// is this message for a bot?
+					if (bot && bot->m_myself == ed)
+					{
 					g_netMsg->SetBot(bot);
 
 					// message handling is done in usermsg.cpp
@@ -2522,10 +2584,12 @@ exportc int GetEngineFunctions(enginefuncs_t* functionTable, int* /*interfaceVer
 					//g_netMsg->HandleMessageIfRequired(msgType, NETMSG_STATUSICON);
 					g_netMsg->HandleMessageIfRequired(msgType, NETMSG_SCREENFADE);
 					//g_netMsg->HandleMessageIfRequired(msgType, NETMSG_BARTIME);
-					g_netMsg->HandleMessageIfRequired(msgType, NETMSG_TEXTMSG);
-					g_netMsg->HandleMessageIfRequired(msgType, NETMSG_SHOWMENU);
+				//	g_netMsg->HandleMessageIfRequired(msgType, NETMSG_TEXTMSG);
+						g_netMsg->HandleMessageIfRequired(msgType, NETMSG_SHOWMENU);
+					}
+					else
+						g_netMsg->HandleMessageIfRequired(msgType, NETMSG_CURWEAPON);
 				}
-			}
 
 		RETURN_META(MRES_IGNORED);
 	};
@@ -2716,6 +2780,14 @@ exportc int Meta_Detach(PLUG_LOADTIME now, PL_UNLOAD_REASON reason)
 	}
 
 	g_botManager->RemoveAll(); // kick all bots off this server
+	UnregisterBreakableDamageHooks();
+	return true;
+}
+
+exportc int GetEngineFunctions_Post(enginefuncs_t* functionTable, int* /*interfaceVersion*/)
+{
+	cmemset(functionTable, 0, sizeof(enginefuncs_t));
+	SemiclipSetEnginePostHookTable(functionTable);
 	return true;
 }
 
@@ -3033,7 +3105,7 @@ C_DLLEXPORT void Amxx_EBotCallNewRound(int index)
 	index--;
 	Bot* amxxbot = g_botManager->GetBot(index);
 	if (amxxbot)
-		amxxbot->NewRound();
+		amxxbot->BotSpawned();
 }
 
 C_DLLEXPORT void Amxx_EBotSetIgnoreClient(int index, int ignore)
@@ -3210,12 +3282,11 @@ C_DLLEXPORT void Amxx_EBotSetZombie(int index, int zombie)
 		amxxbot->m_isZombieBot = static_cast<bool>(zombie);
 		if (!wasZombie && amxxbot->m_isZombieBot)
 		{
-			const float delay = ebot_delay_after_infected.GetFloat();
-			amxxbot->m_infectDelayTime = engine->GetTime() + (delay > 0.0f ? delay : 0.0f);
+			amxxbot->ScheduleHealthMultiplier();
 			amxxbot->m_slowThinkTimer = 0.0f;
 		}
-		else if (!amxxbot->m_isZombieBot)
-			amxxbot->m_infectDelayTime = 0.0f;
+		else if (!amxxbot->m_isZombieBot && wasZombie)
+			amxxbot->m_healthMultiplierTime = 0.0f;
 	}
 }
 
@@ -3588,9 +3659,27 @@ C_DLLEXPORT int Amxx_EBotIsCamping(int index)
 	return 0;
 }
 
-C_DLLEXPORT int Amxx_EBotRegisterEnemyEntity(int index)
+C_DLLEXPORT int Amxx_EBotRegisterEnemyEntity(int index, int targetMask)
 {
-	if (g_entities.Push(index))
+	targetMask &= EnemyEntityTarget_AllBots;
+	if (!targetMask)
+		return 0;
+
+	for (int16_t i = 0; i < g_entities.Size(); i++)
+	{
+		EnemyEntityEntry& enemyEntity = g_entities.Get(i);
+		if (enemyEntity.index == index)
+		{
+			enemyEntity.targetMask = targetMask;
+			return 1;
+		}
+	}
+
+	EnemyEntityEntry enemyEntity;
+	enemyEntity.index = index;
+	enemyEntity.targetMask = targetMask;
+
+	if (g_entities.Push(enemyEntity))
 		return 1;
 
 	return 0;
@@ -3598,8 +3687,14 @@ C_DLLEXPORT int Amxx_EBotRegisterEnemyEntity(int index)
 
 C_DLLEXPORT int Amxx_EBotRemoveEnemyEntity(int index)
 {
-	if (g_entities.Remove(index))
-		return 1;
+	for (int16_t i = 0; i < g_entities.Size(); i++)
+	{
+		if (g_entities.Get(i).index == index)
+		{
+			g_entities.RemoveAt(i);
+			return 1;
+		}
+	}
 
 	return 0;
 }

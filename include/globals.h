@@ -42,14 +42,30 @@ extern float g_fakePingUpdate;
 extern float g_DelayTimer;
 extern float g_fakeCommandTimer;
 
+extern int g_maxClients;
 extern int16_t g_numWaypoints;
 extern int g_gameVersion;
 extern int g_fakeArgc;
 extern int g_storeAddbotVars[4];
+extern int g_playerCurrentWeapon[33];
 extern int g_modelIndexLaser;
 extern int g_modelIndexArrow;
 extern char g_fakeArgv[256];
-extern CArray<int>g_entities;
+
+enum EnemyEntityTarget
+{
+	EnemyEntityTarget_HumanBots = 1 << 0,
+	EnemyEntityTarget_ZombieBots = 1 << 1,
+	EnemyEntityTarget_AllBots = EnemyEntityTarget_HumanBots | EnemyEntityTarget_ZombieBots
+};
+
+struct EnemyEntityEntry
+{
+	int index{0};
+	int targetMask{EnemyEntityTarget_AllBots};
+};
+
+extern CArray<EnemyEntityEntry>g_entities;
 
 extern FireDelay g_fireDelay[Const_NumWeapons + 1];
 extern WeaponSelect g_weaponSelect[Const_NumWeapons + 1];
