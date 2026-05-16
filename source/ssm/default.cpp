@@ -37,8 +37,8 @@ void Bot::DefaultUpdate(void)
 				if ((pev->origin - m_enemyOrigin).GetLengthSquared2D() < (pev->origin - nextVec).GetLengthSquared2D())
 					MoveTo(nextVec);
 				else
-					MoveTo(m_enemyOrigin);
-				LookAt(m_enemyOrigin, m_nearestEnemy->v.velocity);
+					MoveTo(m_nearestEnemy->v.origin);
+				LookAt(m_nearestEnemy->v.origin, m_nearestEnemy->v.velocity);
 
 				if (m_isSlowThink)
 				{

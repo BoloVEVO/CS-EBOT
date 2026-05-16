@@ -1059,13 +1059,10 @@ void Bot::CheckSlowThink(void) {
   m_index = GetIndex() - 1;
 
   // zp & biohazard flashlight support
-  if (ebot_force_flashlight.GetBool()) {
-    if (!m_isZombieBot && !(pev->effects & EF_DIMLIGHT) && m_impulse != 100)
+  if (ebot_force_flashlight.GetBool() && !m_isZombieBot && !(pev->effects & EF_DIMLIGHT))
+  {
       m_impulse = 100;
-  } else {
-    if (pev->effects & EF_DIMLIGHT && m_impulse != 100)
-      m_impulse = 100;
-  }
+  } 
 }
 
 bool Bot::IsAttacking(const edict_t *player) {
@@ -1156,10 +1153,11 @@ void Bot::UpdateLooking(void) {
     if (m_hasEnemiesNear && (m_isEnemyReachable || m_enemyDistance < 384.0f) &&
         IsAlive(m_nearestEnemy)) {
       if (CheckVisibility(m_nearestEnemy)) {
-        LookAt(m_enemyOrigin, m_nearestEnemy->v.velocity);
+        LookAt(m_nearestEnemy->v.origin, m_nearestEnemy->v.velocity);
         FireWeapon(m_enemyDistance);
-      } else
-        LookAt(m_enemyOrigin);
+      }
+      else
+          LookAt(m_destOrigin);
       return;
     }
 
@@ -1199,6 +1197,9 @@ void Bot::UpdateLooking(void) {
   LookAtAround();
 }
 void Bot::LookAtAround(void) {
+    if (IsAttacking(m_myself))
+        return;
+
   m_updateLooking = true;
   m_lookVelocity = nullvec;
   if (m_waypoint.flags & WAYPOINT_USEBUTTON) {

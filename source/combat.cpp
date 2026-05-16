@@ -59,6 +59,9 @@ static inline bool HasUsableHumanFirearm(const Bot* bot)
 
 int Bot::GetNearbyFriendsNearPosition(const Vector& origin, const float radius)
 {
+	if (engine->GetFreeForAll())
+		return 0;
+
 	int count = 0;
 	for (const Clients& client : g_clients)
 	{
@@ -77,7 +80,7 @@ int Bot::GetNearbyEnemiesNearPosition(const Vector& origin, const float radius)
 	int count = 0;
 	for (const Clients& client : g_clients)
 	{
-		if (!(client.flags & CFLAG_USED) || !(client.flags & CFLAG_ALIVE) || client.team == m_team)
+		if (!(client.flags & CFLAG_USED) || !(client.flags & CFLAG_ALIVE) || (client.team == m_team && !engine->GetFreeForAll()))
 			continue;
 
 		if ((client.origin - origin).GetLengthSquared() < radius)
@@ -201,7 +204,7 @@ void Bot::FindFriendsAndEnemiens(void)
 			if (client.ent->v.flags & FL_NOTARGET)
 				continue;
 
-			if (client.team == m_team)
+			if (client.team == m_team && !engine->GetFreeForAll())
 			{
 				m_numFriendsLeft++;
 				distance = GetDistance(myWP, client.wp);
@@ -278,7 +281,7 @@ void Bot::FindFriendsAndEnemiens(void)
 			if (client.ent->v.flags & FL_NOTARGET)
 				continue;
 
-			if (client.team == m_team)
+			if (client.team == m_team && !engine->GetFreeForAll())
 			{
 				m_numFriendsLeft++;
 				distance = GetDistance(myWP, client.wp);
@@ -556,9 +559,9 @@ void Bot::KnifeAttack(void)
 		origin = m_entityOrigin;
 
 	const float distance = (pev->origin - origin).GetLengthSquared2D();
-	if (distance < squaredf(64.0f))
+	if (distance < squaredf(128.0f))
 		m_buttons |= IN_ATTACK;
-	else if (distance < pev->velocity.GetLengthSquared2D())
+	else if (distance < pev->velocity.GetLengthSquared2D() || distance < squaredf(48.0f))
 		m_buttons |= IN_ATTACK2;
 
 	if (pev->origin.z > origin.z && distance < squaredf(54.0f))

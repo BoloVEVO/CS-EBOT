@@ -68,6 +68,7 @@ void Engine::GetGameConVarsPointers(void)
 {
 	m_gameVars[GVAR_GRAVITY] = g_engfuncs.pfnCVarGetPointer("sv_gravity");
 	m_gameVars[GVAR_DEVELOPER] = g_engfuncs.pfnCVarGetPointer("developer");
+	m_gameVars[GVAR_FREEFORALL] = g_engfuncs.pfnCVarGetPointer("mp_freeforall");
 }
 
 const Vector& Engine::GetGlobalVector(const GlobalVector id)
@@ -133,6 +134,13 @@ int Engine::GetDeveloperLevel(void)
 		return 0;
 
 	return static_cast<int>(m_gameVars[GVAR_DEVELOPER]->value);
+}
+
+int Engine::GetFreeForAll(void)
+{
+	if (!m_gameVars[GVAR_FREEFORALL])
+		return 0;
+	return static_cast<int>(m_gameVars[GVAR_FREEFORALL]->value);
 }
 
 void Engine::PrintServer(const char* format, ...)
