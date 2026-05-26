@@ -2226,7 +2226,12 @@ void ServerActivate(edict_t* pentEdictList, int edictCount, int clientMax)
 	g_fakeCommandTimer = 0.0f;
 	g_isFakeCommand = false;
 	g_waypointOn = false;
-
+	for (Clients& client : g_clients)
+	{
+		client.menu = nullptr;
+		client.wpMenuBack = nullptr;
+	}
+	
 	RETURN_META(MRES_IGNORED);
 }
 
@@ -2251,6 +2256,11 @@ void ServerDeactivate(void)
 	g_fakeCommandTimer = 0.0f;
 	g_isFakeCommand = false;
 	g_waypointOn = false;
+	for (Clients& client : g_clients)
+	{
+		client.menu = nullptr;
+		client.wpMenuBack = nullptr;
+	}
 
 	cmemset(g_playerDucking, 0, sizeof(g_playerDucking));
 	cmemset(g_playerDuckingFrom, 0, sizeof(g_playerDuckingFrom));
@@ -2616,17 +2626,17 @@ exportc int GetEngineFunctions(enginefuncs_t* functionTable, int* /*interfaceVer
 					}
 				}
 			}
-				else
+			else
+			{
+				const int playerIndex = ENTINDEX(ed);
+				if (playerIndex > 0 && playerIndex < 33)
+					g_netMsg->SetPlayerIndex(playerIndex);
+
+				Bot* bot = g_botManager->GetBot(ed);
+
+				// is this message for a bot?
+				if (bot && bot->m_myself == ed)
 				{
-					const int playerIndex = ENTINDEX(ed);
-					if (playerIndex > 0 && playerIndex < 33)
-						g_netMsg->SetPlayerIndex(playerIndex);
-
-					Bot* bot = g_botManager->GetBot(ed);
-
-					// is this message for a bot?
-					if (bot && bot->m_myself == ed)
-					{
 					g_netMsg->SetBot(bot);
 
 					// message handling is done in usermsg.cpp
@@ -2639,14 +2649,17 @@ exportc int GetEngineFunctions(enginefuncs_t* functionTable, int* /*interfaceVer
 					//g_netMsg->HandleMessageIfRequired(msgType, NETMSG_STATUSICON);
 					g_netMsg->HandleMessageIfRequired(msgType, NETMSG_SCREENFADE);
 					//g_netMsg->HandleMessageIfRequired(msgType, NETMSG_BARTIME);
-				//	g_netMsg->HandleMessageIfRequired(msgType, NETMSG_TEXTMSG);
-						g_netMsg->HandleMessageIfRequired(msgType, NETMSG_SHOWMENU);
-					}
-					else
-						g_netMsg->HandleMessageIfRequired(msgType, NETMSG_CURWEAPON);
+					//g_netMsg->HandleMessageIfRequired(msgType, NETMSG_TEXTMSG);
+					g_netMsg->HandleMessageIfRequired(msgType, NETMSG_SHOWMENU);
 				}
+				else
+				{
+					g_netMsg->HandleMessageIfRequired(msgType, NETMSG_CURWEAPON);
+					g_netMsg->HandleMessageIfRequired(msgType, NETMSG_SHOWMENU);
+				}
+			}
 
-		RETURN_META(MRES_IGNORED);
+			RETURN_META(MRES_IGNORED);
 	};
 
 	functionTable->pfnMessageEnd = [](void)
