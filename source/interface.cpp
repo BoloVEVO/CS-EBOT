@@ -2655,7 +2655,6 @@ exportc int GetEngineFunctions(enginefuncs_t* functionTable, int* /*interfaceVer
 				else
 				{
 					g_netMsg->HandleMessageIfRequired(msgType, NETMSG_CURWEAPON);
-					g_netMsg->HandleMessageIfRequired(msgType, NETMSG_SHOWMENU);
 				}
 			}
 
