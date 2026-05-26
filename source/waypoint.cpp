@@ -4001,6 +4001,9 @@ void Waypoint::ShowWaypointMsg(void)
 	if (FNullEnt(g_hostEntity))
 		return;
 
+	if (g_numWaypoints < 1)
+		return;
+
 	m_facingAtIndex = GetFacingIndex();
 
 	// reset the minimal distance changed before
@@ -4156,8 +4159,8 @@ void Waypoint::ShowWaypointMsg(void)
 	else
 	{
 		int16_t i;
-		for (i = (g_numWaypoints - 1); i; i--)
-			update(i);
+		for (i = g_numWaypoints; i > 0; i--)
+			update(static_cast<int16_t>(i - 1));
 	}
 
 	if (!IsValidWaypoint(nearestIndex))
