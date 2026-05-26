@@ -36,6 +36,7 @@ ConVar ebot_analyze_create_goal_waypoints("ebot_analyze_starter_waypoints", "1")
 ConVar ebot_running_on_xash("ebot_running_on_xash", "0");
 
 static float secondTimer{0.0f};
+static float clientInfoTimer{0.0f};
 
 static bool IsRoundEndAlertMessage(const char* message)
 {
@@ -275,6 +276,7 @@ int BotCommandHandler_O(edict_t* ent, const char* arg0, const char* arg1, const 
 				ServerPrintNoTag("ebot wp cache		  - cache nearest waypoint");
 				ServerPrintNoTag("ebot wp teleport	   - teleport hostile to specified waypoint");
 				ServerPrintNoTag("ebot wp setradius	  - manually sets the wayzone radius for this waypoint");
+				ServerPrintNoTag("ebot wp autodelete	- automatically deletes waypoints around player");
 				ServerPrintNoTag("ebot path autodistance - opens menu for setting autopath maximum distance");
 				ServerPrintNoTag("ebot path cache		- remember the nearest to player waypoint");
 				ServerPrintNoTag("ebot path create	   - opens menu for path creation");
@@ -359,25 +361,27 @@ int BotCommandHandler_O(edict_t* ent, const char* arg0, const char* arg1, const 
 		edict_t* editor = IsValidPlayer(ent) ? ent : g_hostEntity;
 
 		// enables or disable waypoint displaying
-		if (!cstricmp(arg1, "analyze"))
-		{
-			ServerPrint("Waypoint Analyzing On (Please Manually Edit Waypoints For Better Result)");
-			ServerCommand("ebot wp on");
-			if (ebot_analyze_create_goal_waypoints.GetBool())
-				g_waypoint->CreateBasic();
+			if (!cstricmp(arg1, "analyze"))
+			{
+				ServerPrint("Waypoint Analyzing On (Please Manually Edit Waypoints For Better Result)");
+				ServerCommand("ebot wp on");
+				g_waypoint->ResetAnalyzeState();
+				if (ebot_analyze_create_goal_waypoints.GetBool())
+					g_waypoint->CreateBasic();
 
-			g_analyzewaypoints = true;
+				g_analyzewaypoints = true;
 		}
 
 		else if (!cstricmp(arg1, "analyzeoff"))
 		{
 			g_waypoint->AnalyzeDeleteUselessWaypoints();
 			g_waypoint->Save();
-			ServerPrint("Waypoint Analyzing Off");
-			ServerCommand("ebot wp off");
-			g_analyzeputrequirescrouch = false;
-			g_analyzewaypoints = false;
-		}
+				ServerPrint("Waypoint Analyzing Off");
+				ServerCommand("ebot wp off");
+				g_analyzeputrequirescrouch = false;
+				g_analyzewaypoints = false;
+				g_waypoint->ResetAnalyzeState();
+			}
 
 		else if (!cstricmp(arg1, "analyzefix"))
 		{
@@ -422,6 +426,7 @@ int BotCommandHandler_O(edict_t* ent, const char* arg0, const char* arg1, const 
 		{
 			g_waypointOn = false;
 			g_editNoclip = false;
+			g_autoDeleteDistance = 0.0f;
 			if (!FNullEnt(editor))
 				editor->v.movetype = MOVETYPE_WALK;
 			ServerPrint("Waypoint Editing Disabled");
@@ -522,6 +527,29 @@ int BotCommandHandler_O(edict_t* ent, const char* arg0, const char* arg1, const 
 		{
 			g_waypointOn = true; // turn waypoints on
 			g_waypoint->Delete();
+		}
+
+		else if (!cstricmp(arg1, "autodelete"))
+		{
+			if (IsNullString(arg2))
+			{
+				ClientPrint(ent, print_withtag, "Please set autodelete <distance>, 0 disables it");
+				return 1;
+			}
+
+			g_autoDeleteDistance = cmaxf(0.0f, catof(arg2));
+			if (g_autoDeleteDistance <= 0.0f)
+			{
+				g_autoDeleteDistance = 0.0f;
+				ServerPrint("Waypoint auto-delete disabled");
+			}
+			else
+			{
+				g_waypointOn = true;
+				g_hostEntity = editor;
+				const int deletedCount = g_waypoint->DeleteInRadius(GetEntityOrigin(editor), g_autoDeleteDistance);
+				ServerPrint("Waypoint auto-delete enabled at %.1f units (%d deleted)", g_autoDeleteDistance, deletedCount);
+			}
 		}
 
 		// save waypoint data into file on hard disk
@@ -712,7 +740,7 @@ void ebot_Version_Command(void)
 	ebotVersionMSG();
 }
 
-inline void LoadEntityData(void)
+inline void UpdateClientInfoSlow(void)
 {
 	int i;
 	Bot* bot;
@@ -741,7 +769,6 @@ inline void LoadEntityData(void)
 		if (IsAlive(entity))
 		{
 			g_clients[i].flags |= CFLAG_ALIVE;
-			g_clients[i].team = GetTeam(entity);
 			g_clients[i].origin = GetEntityOrigin(entity);
 			bot = g_botManager->GetBot(i);
 			if (bot && !bot->m_isStuck && IsValidWaypoint(bot->m_currentWaypointIndex) && g_waypoint->Reachable(g_clients[i].ent, bot->m_currentWaypointIndex))
@@ -946,6 +973,13 @@ void Touch_Post(edict_t* pentTouched, edict_t* pentOther)
 	if (bot)
 		bot->CheckTouchEntity(pentTouched);
 
+
+	//Touch event is not called for players in semiclip.
+	//This is for unstucking players who teleported or spawned during the round inside each other.
+	if (SemiclipHooksEnabled()) {
+		SemiclipUpdateUnstuckOverlapFromTouch(pentTouched, pentOther);
+	}
+
 	RETURN_META(MRES_IGNORED);
 }
 
@@ -977,7 +1011,7 @@ int ClientConnect(edict_t* ent, const char* name, const char* addr, char rejectR
 	if (!cstrncmp(addr, "loopback", 9))
 		g_hostEntity = ent; // save the edict of the listen server client...
 
-	LoadEntityData();
+	UpdateClientInfoSlow();
 	RETURN_META_VALUE(MRES_IGNORED, 0);
 }
 
@@ -996,7 +1030,10 @@ void ClientDisconnect(edict_t* ent)
 
 	const int clientIndex = ENTINDEX(ent) - 1;
 	if (clientIndex >= 0 && clientIndex + 1 < 33)
+	{
 		g_playerCurrentWeapon[clientIndex + 1] = 0;
+		ResetPlayerDuckingState(clientIndex + 1);
+	}
 	RadioClientDisconnected(ent);
 
 	// check if its a bot
@@ -1004,7 +1041,7 @@ void ClientDisconnect(edict_t* ent)
 	if (bot && bot->m_myself == ent)
 		g_botManager->Free(clientIndex);
 
-	LoadEntityData();
+	UpdateClientInfoSlow();
 	RETURN_META(MRES_IGNORED);
 }
 
@@ -2168,7 +2205,7 @@ void ServerActivate(edict_t* pentEdictList, int edictCount, int clientMax)
 	// Reset runtime autopath distance on every map load.
 	// This prevents disabled autopath (0) from leaking into the next map.
 	g_autoPathDistance = 160.0f;
-	SemiclipReset();
+	g_autoDeleteDistance = 0.0f;
 
 	// do level initialization stuff here...
 	g_waypoint->Initialize();
@@ -2177,11 +2214,15 @@ void ServerActivate(edict_t* pentEdictList, int edictCount, int clientMax)
 	// execute main config
 	ServerCommand("exec addons/ebot/ebot.cfg");
 	ServerCommand("exec addons/ebot/maps/%s.cfg", GetMapName());
+	SERVER_EXECUTE();
+
+	SemiclipReset();
 
 	g_botManager->InitQuota();
 	RadioResetAll();
 
 	secondTimer = 0.0f;
+	clientInfoTimer = 0.0f;
 	g_fakeCommandTimer = 0.0f;
 	g_isFakeCommand = false;
 	g_waypointOn = false;
@@ -2206,9 +2247,15 @@ void ServerDeactivate(void)
 		g_waypoint->StopMatrixCalculation();
 
 	secondTimer = 0.0f;
+	clientInfoTimer = 0.0f;
 	g_fakeCommandTimer = 0.0f;
 	g_isFakeCommand = false;
 	g_waypointOn = false;
+
+	cmemset(g_playerDucking, 0, sizeof(g_playerDucking));
+	cmemset(g_playerDuckingFrom, 0, sizeof(g_playerDuckingFrom));
+	cmemset(g_entityTargetMask, 0, sizeof(g_entityTargetMask));
+
 	RadioResetAll();
 
 	if (g_gameVersion & Game::Xash)
@@ -2343,9 +2390,10 @@ inline void JustAStuff(void)
 inline void FrameThread(void)
 {
 	TryRegisterBreakableDamageHooks();
-	LoadEntityData();
+	UpdateClientInfoSlow();
 	g_botManager->SlowFrameCheck();
 	JustAStuff();
+	RadioUpdate();
 
 	if (ebot_running_on_xash.GetBool())
 		g_gameVersion |= Game::Xash;
@@ -2368,12 +2416,20 @@ void StartFrame(void)
 	// for example if a new player joins the server, we should disconnect a bot, and if the
 	// player population decreases, we should fill the server with other bots.
 
+	const float time = engine->GetTime();
+
+	if (clientInfoTimer < time)
+	{
+		UpdateClientInfoFast();
+		clientInfoTimer = time + 0.1f;
+	}
+
 	if (g_analyzewaypoints)
 		g_waypoint->Analyze();
-	else if (secondTimer < engine->GetTime())
+	else if (secondTimer < time)
 	{
 		FrameThread();
-		secondTimer = engine->GetTime() + 1.0f;
+		secondTimer = time + 1.0f;
 	}
 	else
 		g_botManager->MaintainBotQuota();
@@ -2389,7 +2445,6 @@ void StartFrame_Post(void)
 	// during the game, for example making the bots think (yes, because no Think() function exists
 	// for the bots by the MOD side, remember).  Post version called only by metamod.
 
-	RadioUpdate();
 	g_botManager->Think();
 	RETURN_META(MRES_IGNORED);
 }
@@ -3661,6 +3716,9 @@ C_DLLEXPORT int Amxx_EBotIsCamping(int index)
 
 C_DLLEXPORT int Amxx_EBotRegisterEnemyEntity(int index, int targetMask)
 {
+	if (index <= 0 || index >= Const_MaxEntities)
+		return 0;
+
 	targetMask &= EnemyEntityTarget_AllBots;
 	if (!targetMask)
 		return 0;
@@ -3671,6 +3729,7 @@ C_DLLEXPORT int Amxx_EBotRegisterEnemyEntity(int index, int targetMask)
 		if (enemyEntity.index == index)
 		{
 			enemyEntity.targetMask = targetMask;
+			g_entityTargetMask[index] = targetMask;
 			return 1;
 		}
 	}
@@ -3680,18 +3739,25 @@ C_DLLEXPORT int Amxx_EBotRegisterEnemyEntity(int index, int targetMask)
 	enemyEntity.targetMask = targetMask;
 
 	if (g_entities.Push(enemyEntity))
+	{
+		g_entityTargetMask[index] = targetMask;
 		return 1;
+	}
 
 	return 0;
 }
 
 C_DLLEXPORT int Amxx_EBotRemoveEnemyEntity(int index)
 {
+	if (index <= 0 || index >= Const_MaxEntities)
+		return 0;
+
 	for (int16_t i = 0; i < g_entities.Size(); i++)
 	{
 		if (g_entities.Get(i).index == index)
 		{
 			g_entities.RemoveAt(i);
+			g_entityTargetMask[index] = 0;
 			return 1;
 		}
 	}
@@ -3702,6 +3768,7 @@ C_DLLEXPORT int Amxx_EBotRemoveEnemyEntity(int index)
 C_DLLEXPORT void Amxx_EBotClearRegisteredEnemyEntities(void)
 {
 	g_entities.Destroy();
+	cmemset(g_entityTargetMask, 0, sizeof(g_entityTargetMask));
 }
 
 DLL_GIVEFNPTRSTODLL GiveFnptrsToDll(enginefuncs_t* functionTable, globalvars_t* pGlobals)

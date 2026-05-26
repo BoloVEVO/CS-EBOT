@@ -12,8 +12,6 @@ AI Bot for Counter-Strike based on SyPB, this bot is only for zombie plague/esca
 
 [Click HERE To Join E-BOT Discord Community](http://discord.gg/v7PesBamXt)
 
-[Click HERE To Join E-BOT Steam Community](https://steamcommunity.com/groups/E125G)
-
 <br>
 
 # How to install
@@ -44,8 +42,6 @@ AI Bot for Counter-Strike based on SyPB, this bot is only for zombie plague/esca
 
 Press `j` or `k` and you can manage waypoints and bots. 
 
-(NOTE: Editing waypoints/paths with bots may cause crashes)
-
 
 # How to use - dedicated server
 1. Set password in ebot.cfg, for example: `ebot_password_key "39532"`
@@ -57,7 +53,6 @@ Press `j` or `k` and you can manage waypoints and bots.
 
 Now on `k` you have main menu and on `j` wp editing menu.
 
-(NOTE: Editing waypoints/paths with bots on the server may cause crashes)
 
 ### Other usefull commands:
 - `bind "KP_MINUS"             "ebot kickall"`
@@ -186,7 +181,7 @@ E-Bot Main Menu
       4. Avoid - add avoid waypoint
       5. Rescue Zone - add rescue waypoint
       6. Camping - add camp waypoint
-      7. Helicopter - add button/elevator-type waypoint
+      7. Helicopter - add use-button waypoint (legacy menu label)
       8. Map Goal - add goal waypoint
       9. Jump - start learn-jump waypoint placement (experimental)
       0. Exit - close menu
@@ -210,7 +205,7 @@ E-Bot Main Menu
       4. Human Only - toggle human-only flag
       5. Zombie Push - toggle zombie-push flag
       6. Fall Risk - toggle fall-risk flag
-      7. Specific Gravity - toggle specific-gravity flag
+      7. Specific Gravity (1 = 800) - toggle specific-gravity flag
       8. Previous... - to page 1
       9. Next... - to page 3
       0. Exit - close menu
@@ -240,6 +235,7 @@ E-Bot Main Menu
       5. Jump Path + Outgoing - jump nearest -> target + normal target -> nearest
       6. Zombie Boosting Path - create nearest -> target with boost flag
       7. Delete Path - remove existing path between selected points
+      8. Delete last created path - undo the last path created from this menu
       0. Exit - close menu
 
    3. Select Personality - shortcut to personality/team/model add flow
@@ -329,6 +325,7 @@ Waypoint commands (`ebot wp`, aliases: `ebot waypoint`, `ebot wpt`):
 - `ebot wp cache` - cache nearest waypoint.
 - `ebot wp teleport <index>` - teleport to waypoint.
 - `ebot wp setradius <value>` - set nearest waypoint radius.
+- `ebot wp autodelete <value>` - auto-delete waypoints within value units around the editor; `0` disables it.
 - `ebot wp setmesh <value>` - set nearest waypoint mesh id.
 - `ebot wp setgravity <value>` - set nearest waypoint gravity.
 - `ebot wp delete` - delete nearest waypoint.

@@ -235,6 +235,7 @@ enum class LiftState : int8_t {
 
 constexpr int8_t Const_MaxPathIndex = 8;
 constexpr int16_t Const_MaxWaypoints = 8192;
+constexpr int Const_MaxEntities = 2048; // The server limit can be higher (with command line option like: -num_edicts 4096), but the client still supports a maximum of 2048
 constexpr int Const_NumWeapons = 24;
 constexpr int Const_MaxWeapons = 32;
 
@@ -538,7 +539,10 @@ public:
   float m_zoomCheckTime{0.0f}; // time to check zoom again
 
   float m_duckTime{0.0f};       // time to duck
+  float m_zombieBoostDuckUntil{0.0f}; // hold only IN_DUCK for zombie boost
   float m_jumpTime{0.0f};       // time last jump happened
+  float m_airborneStartTime{0.0f}; // when human bot started falling
+  bool m_humanParachuteActive{false}; // keep IN_USE held until landing
   float m_waterJumpHoldEndTime{0.0f}; // keep IN_JUMP held for water jump
   float m_ladderJumpNoInputStartTime{0.0f}; // when ladder jump suppress starts
   float m_ladderJumpNoInputTime{0.0f}; // suppress input after ladder jump
@@ -595,6 +599,7 @@ public:
   }
   inline bool IsInWater(void) { return pev->waterlevel > 2; }
   bool IsLadderJumpNoInputActive(const float time);
+  void UpdateHumanParachuteUse(const float time);
 
   void SetStrafeSpeed(const Vector &moveDir, const float strafeSpeed);
   void SetStrafeSpeedNoCost(const Vector &moveDir, const float strafeSpeed);
@@ -748,6 +753,7 @@ public:
   void UpdateLooking(void);
   void UpdateProcess(void);
   void CheckSlowThink(void);
+  bool HandleZombieBoost(void);
 
   Process GetCurrentState(void);
   float GetCurrentStateTime(void);
@@ -887,7 +893,7 @@ public:
   Bot *GetBot(edict_t *ent);
 
   int GetBotsNum(void);
-  int GetHumansNum(void);
+  int GetRealPlayersNum(void);
 
   void Think(void);
   void SlowFrameCheck(void);
@@ -1041,6 +1047,7 @@ public:
 
   void Initialize(void);
   void Analyze(void);
+  void ResetAnalyzeState(void);
   void AnalyzeDeleteUselessWaypoints(void);
   void InitTypes(void);
   void AddZMCamps(void);
@@ -1066,7 +1073,8 @@ public:
   void Add(const int flags, const Vector &waypointOrigin = nullvec,
            const float analyzeRange = 128.0f);
   void Delete(void);
-  void DeleteByIndex(int16_t index);
+  void DeleteByIndex(int16_t index, bool playSound = true);
+  int DeleteInRadius(const Vector &origin, float radius);
   void ToggleFlags(int toggleFlag);
   void SetRadius(const int radius);
   bool IsConnected(const int16_t pointA, const int16_t pointB);
@@ -1130,7 +1138,11 @@ public:
 
 // prototypes of bot functions...
 extern int GetTeam(edict_t *ent);
-extern bool IsBreakable(edict_t *ent);
+extern int GetCachedPlayerTeam(const int index);
+extern int GetCachedPlayerTeam(edict_t *ent);
+extern bool IsNativeBreakable(edict_t *ent);
+extern bool IsBreakableTarget(edict_t* ent, bool nativeOnly = false);
+extern bool IsBreakableDamageClass(edict_t* ent);
 extern bool IsZombieEntity(edict_t *ent);
 extern float GetShootingConeDeviation(edict_t *ent, const Vector &position);
 
@@ -1163,8 +1175,21 @@ extern void SemiclipSetPreHookTable(DLL_FUNCTIONS *functionTable);
 extern void SemiclipSetPostHookTable(DLL_FUNCTIONS *functionTable);
 extern void SemiclipSetEnginePostHookTable(enginefuncs_t *functionTable);
 extern void SemiclipUpdateHooks(void);
+extern void SemiclipUpdateSettings(void);
+extern bool SemiclipHooksEnabled(void);
 extern void SemiclipReset(void);
+extern bool SemiclipDuckBoostEnabled(void);
+extern bool SemiclipDuckBoostAllowedForTeam(const int team);
+extern void SemiclipUpdateUnstuckOverlapFromTouch(edict_t *first, edict_t *second);
+extern void SemiclipCheckChangedConditions(edict_t *host, const int hostIndex,
+                                           const int hostTeam,
+                                           const float time);
+extern void SemiclipRefreshChangedConditions(edict_t *host, const int hostIndex,
+                                             const int hostTeam,
+                                             const float time);
 extern void SemiclipUpdatePlayerUnstuck(edict_t *player);
+extern void ResetPlayerDuckingState(const int playerIndex);
+extern void UpdateClientInfoFast(void);
 
 extern char *GetEntityName(edict_t *entity);
 extern char *GetMapName(void);

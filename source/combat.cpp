@@ -129,7 +129,7 @@ void Bot::FindFriendsAndEnemiens(void)
 
 	if (m_isZombieBot)
 	{
-		bool needTarget = (!IsAlive(m_nearestEnemy) || GetTeam(m_nearestEnemy) == m_team);
+		bool needTarget = (!IsAlive(m_nearestEnemy) || GetCachedPlayerTeam(m_nearestEnemy) == m_team);
 		edict_t* randomEnemy = nullptr;
 		const int randomTargetPercent = cclamp(ebot_zombie_random_target_percent.GetInt(), 0, 100);
 

@@ -53,13 +53,53 @@ ConVar ebot_analyze_optimize_duplicate_factor("ebot_analyze_optimize_duplicate_f
 ConVar ebot_analyze_optimize_duplicate_height("ebot_analyze_optimize_duplicate_height", "4");
 ConVar ebot_analyze_optimize_collinear_rise("ebot_analyze_optimize_collinear_rise", "2");
 ConVar ebot_analyze_optimize_low_importance("ebot_analyze_optimize_low_importance", "8");
+ConVar ebot_analyze_waypoints_per_frame("ebot_analyze_waypoints_per_frame", "8");
+ConVar ebot_analyze_optimize_passes_per_frame("ebot_analyze_optimize_passes_per_frame", "1");
 
 // matrix calculation is detached, so guard matrix memory lifetime with a mutex.
 static tthread::mutex calcMutex{};
 static constexpr float kAnalyzeAutoPathDistance = 250.0f;
 static constexpr float kAnalyzeBypassDistance = kAnalyzeAutoPathDistance * 1.5f;
 static constexpr float kGeneratedAscendingJumpMaxDistance = 100.0f;
+static constexpr int kAnalyzeGeneratedWaypointLogStep = 100;
+static int g_analyzeGeneratedWaypointCount = 0;
+static int16_t g_analyzeWaypointIndex = 0;
+static int g_analyzeOptimizeCheckedWaypoints = 0;
+static int g_analyzeOptimizeTotalWaypoints = 0;
 static constexpr float kLadderColumnMaxOffset = 56.0f;
+
+static void ShowAnalyzeHud(const char* phase, const int checked, const int total)
+{
+	if (FNullEnt(g_hostEntity))
+		return;
+
+	const int safeTotal = cmax(1, total);
+	const int safeChecked = cclamp(checked, 0, safeTotal);
+	const float percent = static_cast<float>(safeChecked) / static_cast<float>(safeTotal) * 100.0f;
+	char message[192];
+	snprintf(message, sizeof(message),
+		"+-----------------------------------------------+\n"
+		"| %s |\n"
+		"| %d/%d (%.1f%%) |\n"
+		"+-----------------------------------------------+\n",
+		phase, safeChecked, safeTotal, percent);
+	HudMessage(g_hostEntity, true, Color(255, 255, 255, 255), "%s", message);
+}
+
+static void ShowAnalyzeCountHud(const char* phase, const int count)
+{
+	if (FNullEnt(g_hostEntity))
+		return;
+
+	char message[192];
+	snprintf(message, sizeof(message),
+		"+-----------------------------------------------+\n"
+		"| %s |\n"
+		"| %d waypoints |\n"
+		"+-----------------------------------------------+\n",
+		phase, count);
+	HudMessage(g_hostEntity, true, Color(255, 255, 255, 255), "%s", message);
+}
 
 static inline bool IsSameLadderColumn(const Vector& src, const Vector& dest)
 {
@@ -173,7 +213,7 @@ inline void CreateWaypoint(const Vector& start, Vector& Next, float range, const
 	Next.z -= 19.0f;
 
 	range *= rngmul;
-	bool isBreakable = IsBreakable(tr.pHit);
+	bool isBreakable = IsNativeBreakable(tr.pHit);
 	if (tr.flFraction < 1.0f && !isBreakable)
 		return;
 
@@ -213,7 +253,7 @@ inline void CreateLadderWaypoint(Vector& Next)
 	TraceHull(Next, Next, TraceIgnore::Monsters, head_hull, g_hostEntity, &tr);
 	Next.z -= 19.0f;
 
-	bool isBreakable = IsBreakable(tr.pHit);
+	bool isBreakable = IsNativeBreakable(tr.pHit);
 	if (tr.flFraction < 1.0f && !isBreakable)
 		return;
 
@@ -244,9 +284,11 @@ private:
 	int16_t m_numWaypoints;
 	CArray<Path>* m_paths;
 	float m_optimizeDistance;
-	OptimizationStats m_stats;
-	CArray<uint8_t> m_removed;
-	bool m_removedReady;
+		OptimizationStats m_stats;
+		CArray<uint8_t> m_removed;
+		bool m_removedReady;
+		bool m_started;
+		int m_pass;
 
 	// Optimizer clears removed waypoints in-place, so track already removed indices.
 	bool IsRemovedWaypoint(const int16_t index)
@@ -361,7 +403,7 @@ private:
 				return false;
 
 			const Vector projected = from + line * t;
-			return (mid - projected).GetLength() < tolerance;
+			return (mid - projected).GetLengthSquared() < squaredf(tolerance);
 		}
 
 	uint16_t SanitizeConnectionFlagsForLink(const int16_t from, const int16_t to, uint16_t flags) const
@@ -824,7 +866,7 @@ private:
 					if (cabsf(pathI->origin.z - pathJ->origin.z) > duplicateHeightThreshold)
 						continue;
 
-					if ((pathI->origin - pathJ->origin).GetLength() < duplicateDistance)
+					if ((pathI->origin - pathJ->origin).GetLengthSquared() < squaredf(duplicateDistance))
 					{
 						impI = GetWaypointImportance(i);
 						impJ = GetWaypointImportance(j);
@@ -937,14 +979,16 @@ private:
 			return changed;
 		}
 public:
-	WaypointOptimizer(CArray<Path>* paths, int16_t numWaypoints) : m_paths(paths), m_numWaypoints(numWaypoints), m_optimizeDistance(cclampf(ebot_analyze_optimize_distance.GetFloat(), 64.0f, 512.0f))
-		{
-			m_stats.removedCollinear = 0;
-			m_stats.removedDuplicate = 0;
-			m_stats.removedUnconnected = 0;
-			m_stats.removedLowImportance = 0;
-			m_stats.totalRemoved = 0;
-			m_removedReady = false;
+		WaypointOptimizer(CArray<Path>* paths, int16_t numWaypoints) : m_paths(paths), m_numWaypoints(numWaypoints), m_optimizeDistance(cclampf(ebot_analyze_optimize_distance.GetFloat(), 64.0f, 512.0f))
+			{
+				m_stats.removedCollinear = 0;
+				m_stats.removedDuplicate = 0;
+				m_stats.removedUnconnected = 0;
+				m_stats.removedLowImportance = 0;
+				m_stats.totalRemoved = 0;
+				m_removedReady = false;
+				m_started = false;
+				m_pass = 0;
 
 			if (m_removed.Resize(m_numWaypoints, true))
 			{
@@ -959,83 +1003,105 @@ public:
 			}
 		}
 
-		void Optimize(void)
-			{
-				if (m_numWaypoints < 50)
+			bool OptimizeBatch(const int maxPasses)
 				{
-					ServerPrint("Not enough waypoints to optimize (%d)", m_numWaypoints);
-					return;
-				}
-
-				ServerPrint("=== WAYPOINT OPTIMIZATION STARTED ===");
-				ServerPrint("Initial waypoints: %d", m_numWaypoints);
-				ServerPrint("Optimize distance: %.1f", m_optimizeDistance);
-				ServerPrint("Remove collinear: %s", ebot_analyze_optimize_remove_collinear.GetBool() ? "on" : "off");
-				ServerPrint("Remove duplicate: %s", ebot_analyze_optimize_remove_duplicate.GetBool() ? "on" : "off");
-				ServerPrint("Duplicate distance: %.1f", GetDuplicateDistance());
-				ServerPrint("Duplicate max height diff: %.1f", GetDuplicateHeightThreshold());
-				ServerPrint("Collinear max rise: %.1f", GetCollinearRiseThreshold());
-				ServerPrint("Low importance threshold: %.1f", GetLowImportanceThreshold());
-				if (!m_removedReady)
-				{
-					ServerPrint("Optimization aborted: failed to allocate removed-waypoint mask (%d).", m_numWaypoints);
-					return;
-				}
-
-				int16_t pass = 0;
-				bool changed = false;
-				for (;;)
-				{
-					pass++;
-					changed = false;
-
-					ServerPrint("[Pass %d] Running optimization checks...", pass);
-
-					if (ebot_analyze_optimize_remove_collinear.GetBool() && Pass_RemoveCollinear())
+					if (m_numWaypoints < 50)
 					{
-					changed = true;
-					continue;
-				}
+						ServerPrint("Not enough waypoints to optimize (%d)", m_numWaypoints);
+						return true;
+					}
+	
+					if (!m_started)
+					{
+						ServerPrint("=== WAYPOINT OPTIMIZATION STARTED ===");
+						ServerPrint("Initial waypoints: %d", m_numWaypoints);
+						ServerPrint("Optimize distance: %.1f", m_optimizeDistance);
+						ServerPrint("Remove collinear: %s", ebot_analyze_optimize_remove_collinear.GetBool() ? "on" : "off");
+						ServerPrint("Remove duplicate: %s", ebot_analyze_optimize_remove_duplicate.GetBool() ? "on" : "off");
+						ServerPrint("Duplicate distance: %.1f", GetDuplicateDistance());
+						ServerPrint("Duplicate max height diff: %.1f", GetDuplicateHeightThreshold());
+						ServerPrint("Collinear max rise: %.1f", GetCollinearRiseThreshold());
+						ServerPrint("Low importance threshold: %.1f", GetLowImportanceThreshold());
+						if (!m_removedReady)
+						{
+							ServerPrint("Optimization aborted: failed to allocate removed-waypoint mask (%d).", m_numWaypoints);
+							return true;
+						}
 
-				if (ebot_analyze_optimize_remove_duplicate.GetBool() && Pass_RemoveDuplicates())
-				{
-					changed = true;
-					continue;
-				}
-
-				if (Pass_RemoveUnconnected())
-				{
-					changed = true;
-					continue;
-				}
-
-				if (Pass_RemoveLowImportance())
-				{
-					changed = true;
-					continue;
-				}
-
-				if (!changed)
-					break;
+						m_started = true;
+					}
+	
+					int processedPasses = 0;
+					const int passLimit = cmax(1, maxPasses);
+					while (processedPasses < passLimit)
+					{
+						m_pass++;
+						processedPasses++;
+						bool changed = false;
+	
+						const int removedWaypoints = m_stats.removedCollinear + m_stats.removedDuplicate + m_stats.removedUnconnected + m_stats.removedLowImportance;
+						g_analyzeOptimizeCheckedWaypoints = removedWaypoints;
+						g_analyzeOptimizeTotalWaypoints = m_numWaypoints;
+						const float removedWaypointPercent = static_cast<float>(removedWaypoints) / static_cast<float>(m_numWaypoints) * 100.0f;
+						ServerPrint("[Pass %d] Optimization progress... removed %d/%d waypoints (%.1f%%)", m_pass, removedWaypoints, m_numWaypoints, removedWaypointPercent);
+	
+						if (ebot_analyze_optimize_remove_collinear.GetBool() && Pass_RemoveCollinear())
+						{
+							changed = true;
+						}
+						else if (ebot_analyze_optimize_remove_duplicate.GetBool() && Pass_RemoveDuplicates())
+						{
+							changed = true;
+						}
+						else if (Pass_RemoveUnconnected())
+						{
+							changed = true;
+						}
+						else if (Pass_RemoveLowImportance())
+						{
+							changed = true;
+						}
+	
+						if (!changed)
+						{
+							m_stats.totalRemoved = m_stats.removedCollinear + m_stats.removedDuplicate + m_stats.removedUnconnected + m_stats.removedLowImportance;
+							ServerPrint("=== WAYPOINT OPTIMIZATION COMPLETE ===");
+							ServerPrint("Collinear removed: %d", m_stats.removedCollinear);
+							ServerPrint("Duplicate removed: %d", m_stats.removedDuplicate);
+							ServerPrint("Unconnected removed: %d", m_stats.removedUnconnected);
+							ServerPrint("Low importance removed: %d", m_stats.removedLowImportance);
+							ServerPrint("Total removed: %d", m_stats.totalRemoved);
+							ServerPrint("Final waypoints: %d", m_numWaypoints - m_stats.totalRemoved);
+							ServerPrint("Optimization ratio: %.1f%%", (float)m_stats.totalRemoved / m_numWaypoints * 100.0f);
+							return true;
+						}
+					}
+	
+					return false;
 			}
+	};
+	
+	static WaypointOptimizer* g_analyzeOptimizer = nullptr;
 
-			m_stats.totalRemoved = m_stats.removedCollinear + m_stats.removedDuplicate + m_stats.removedUnconnected + m_stats.removedLowImportance;
-			ServerPrint("=== WAYPOINT OPTIMIZATION COMPLETE ===");
-			ServerPrint("Collinear removed: %d", m_stats.removedCollinear);
-			ServerPrint("Duplicate removed: %d", m_stats.removedDuplicate);
-			ServerPrint("Unconnected removed: %d", m_stats.removedUnconnected);
-			ServerPrint("Low importance removed: %d", m_stats.removedLowImportance);
-			ServerPrint("Total removed: %d", m_stats.totalRemoved);
-			ServerPrint("Final waypoints: %d", m_numWaypoints - m_stats.totalRemoved);
-			ServerPrint("Optimization ratio: %.1f%%", (float)m_stats.totalRemoved / m_numWaypoints * 100.0f);
+	inline bool OptimizeThread(void)
+	{
+		if (!g_analyzeOptimizer)
+		{
+			g_analyzeOptimizer = new(std::nothrow) WaypointOptimizer(&g_waypoint->m_paths, g_numWaypoints);
+			if (!g_analyzeOptimizer)
+			{
+				AddLogEntry(Log::Memory, "unexpected memory error -> not enough memory (%s free byte required)", sizeof(WaypointOptimizer));
+				return true;
+			}
 		}
-};
 
-inline void OptimizeThread(void)
-{
-	WaypointOptimizer optimizer(&g_waypoint->m_paths, g_numWaypoints);
-	optimizer.Optimize();
-}
+		if (!g_analyzeOptimizer->OptimizeBatch(cclamp(ebot_analyze_optimize_passes_per_frame.GetInt(), 1, 64)))
+			return false;
+
+		delete g_analyzeOptimizer;
+		g_analyzeOptimizer = nullptr;
+		return true;
+	}
 
 inline void SanitizeLadderConnectionFlags(void)
 {
@@ -1123,15 +1189,13 @@ inline void FixWaypoints(void)
 static CPtr<bool>expanded;
 void AnalyzeThread(void)
 {
-	if (!FNullEnt(g_hostEntity))
-	{
-		char message[] =
-			"+-----------------------------------------------+\n"
-			"| Analyzing the map for walkable places |\n"
-			"+-----------------------------------------------+\n";
-
-		HudMessage(g_hostEntity, true, Color(255, 255, 255, 255), message);
-	}
+		if (!FNullEnt(g_hostEntity))
+		{
+			if (g_analyzeWaypointIndex < g_numWaypoints)
+				ShowAnalyzeCountHud("Adding waypoints", g_numWaypoints);
+			else
+				ShowAnalyzeHud("Optimizing waypoints", g_analyzeOptimizeCheckedWaypoints, g_analyzeOptimizeTotalWaypoints ? g_analyzeOptimizeTotalWaypoints : g_numWaypoints);
+		}
 	else if (!IsDedicatedServer())
 		return;
 
@@ -1140,6 +1204,16 @@ void AnalyzeThread(void)
 	// guarantee to have it
 	if (!expanded.IsAllocated())
 	{
+		g_analyzeGeneratedWaypointCount = 0;
+		g_analyzeWaypointIndex = 0;
+		g_analyzeOptimizeCheckedWaypoints = 0;
+		g_analyzeOptimizeTotalWaypoints = 0;
+		if (g_analyzeOptimizer)
+		{
+			delete g_analyzeOptimizer;
+			g_analyzeOptimizer = nullptr;
+		}
+
 		bool* temp = new(std::nothrow) bool[Const_MaxWaypoints];
 		if (!temp)
 			return;
@@ -1160,8 +1234,11 @@ void AnalyzeThread(void)
 	const float range = ebot_analyze_distance.GetFloat();
 	Vector WayVec, Next;
 	int8_t dir, C, concount, concount2;
-	for (i = 0; i < g_numWaypoints; i++)
+	const int waypointsPerFrame = cclamp(ebot_analyze_waypoints_per_frame.GetInt(), 1, 512);
+	int processedWaypoints = 0;
+	while (g_analyzeWaypointIndex < g_numWaypoints && processedWaypoints < waypointsPerFrame)
 	{
+		i = g_analyzeWaypointIndex++;
 		if (expanded[i])
 			continue;
 
@@ -1288,7 +1365,11 @@ void AnalyzeThread(void)
 		}
 
 		expanded[i] = true;
+		processedWaypoints++;
 	}
+
+	if (g_analyzeWaypointIndex < g_numWaypoints)
+		return;
 
 	for (i = 0; i < g_numWaypoints; i++)
 	{
@@ -1296,8 +1377,8 @@ void AnalyzeThread(void)
 			return;
 	}
 
-	if (ebot_analyze_post_processing.GetInt() == 2)
-		OptimizeThread();
+	if (ebot_analyze_post_processing.GetInt() == 2 && !OptimizeThread())
+		return;
 
 	for (i = 0; i < g_numWaypoints; i++)
 	{
@@ -1305,8 +1386,8 @@ void AnalyzeThread(void)
 			return;
 	}
 
-	if (ebot_analyze_post_processing.GetInt() == 1)
-		OptimizeThread();
+	if (ebot_analyze_post_processing.GetInt() == 1 && !OptimizeThread())
+		return;
 
 	FixWaypoints();
 	g_waypoint->AnalyzeDeleteUselessWaypoints();
@@ -1319,6 +1400,14 @@ void AnalyzeThread(void)
 	ServerCommand("ebot wp mdl off");
 	g_analyzewaypoints = false;
 	expanded.Destroy();
+	g_analyzeWaypointIndex = 0;
+	g_analyzeOptimizeCheckedWaypoints = 0;
+	g_analyzeOptimizeTotalWaypoints = 0;
+	if (g_analyzeOptimizer)
+	{
+		delete g_analyzeOptimizer;
+		g_analyzeOptimizer = nullptr;
+	}
 	g_waypoint->AddZMCamps();
 	g_waypoint->InitPathMatrix();
 	g_botManager->InitQuota();
@@ -1330,6 +1419,20 @@ void Waypoint::Analyze(void)
 		return;
 
 	AnalyzeThread();
+}
+
+void Waypoint::ResetAnalyzeState(void)
+{
+	expanded.Destroy();
+	g_analyzeWaypointIndex = 0;
+	g_analyzeGeneratedWaypointCount = 0;
+	g_analyzeOptimizeCheckedWaypoints = 0;
+	g_analyzeOptimizeTotalWaypoints = 0;
+	if (g_analyzeOptimizer)
+	{
+		delete g_analyzeOptimizer;
+		g_analyzeOptimizer = nullptr;
+	}
 }
 
 void Waypoint::AnalyzeDeleteUselessWaypoints(void)
@@ -1698,6 +1801,13 @@ void Waypoint::Add(const int flags, const Vector& waypointOrigin, const float an
 
 		// store the last used waypoint for the auto waypoint code...
 		m_lastWaypoint = GetEntityOrigin(g_hostEntity);
+
+		if (g_analyzewaypoints)
+		{
+			g_analyzeGeneratedWaypointCount++;
+			if (g_analyzeGeneratedWaypointCount % kAnalyzeGeneratedWaypointLogStep == 0)
+				ServerPrint("Waypoint analyzer generated %d waypoints", g_analyzeGeneratedWaypointCount);
+		}
 	}
 
 	// set the time that this waypoint was originally displayed...
@@ -1976,7 +2086,7 @@ void Waypoint::Delete(void)
 	DeleteByIndex(index);
 }
 
-void Waypoint::DeleteByIndex(const int16_t index)
+void Waypoint::DeleteByIndex(const int16_t index, const bool playSound)
 {
 	g_waypointsChanged = true;
 	if (g_numWaypoints < 1)
@@ -2096,7 +2206,47 @@ void Waypoint::DeleteByIndex(const int16_t index)
 	if (m_waypointDisplayTime.IsAllocated())
 		m_waypointDisplayTime[index] = 0.0f;
 
-	PlaySound(g_hostEntity, "weapons/mine_activate.wav");
+	if (playSound)
+		PlaySound(g_hostEntity, "weapons/mine_activate.wav");
+}
+
+int Waypoint::DeleteInRadius(const Vector& origin, const float radius)
+{
+	if (radius <= 0.0f || g_numWaypoints < 1)
+		return 0;
+
+	CArray<int16_t> nearby;
+	CArray<int16_t> toDelete;
+	CollectNearbyWaypoints(origin, radius, nearby);
+
+	const float radiusSq = squaredf(radius);
+	for (int16_t i = 0; i < nearby.Size(); i++)
+	{
+		const int16_t index = nearby[i];
+		if (!IsValidWaypoint(index))
+			continue;
+
+		if ((m_paths[index].origin - origin).GetLengthSquared() <= radiusSq)
+			toDelete.Push(index);
+	}
+
+	for (int16_t i = 0; i < toDelete.Size(); i++)
+	{
+		for (int16_t j = i + 1; j < toDelete.Size(); j++)
+		{
+			if (toDelete[j] > toDelete[i])
+				cswap(toDelete[i], toDelete[j]);
+		}
+	}
+
+	const int deletedCount = toDelete.Size();
+	for (int16_t i = 0; i < toDelete.Size(); i++)
+		DeleteByIndex(toDelete[i], false);
+
+	if (deletedCount > 0)
+		PlaySound(g_hostEntity, "weapons/mine_activate.wav");
+
+	return deletedCount;
 }
 
 void Waypoint::DeleteFlags(void)
@@ -3774,6 +3924,9 @@ void Waypoint::Think(void)
 	// this function is only valid on listenserver, and in waypoint enabled mode
 	if (FNullEnt(g_hostEntity))
 		return;
+
+	if (g_autoDeleteDistance > 0.0f)
+		DeleteInRadius(GetEntityOrigin(g_hostEntity), g_autoDeleteDistance);
 
 	ShowWaypointMsg();
 

@@ -39,8 +39,200 @@ ConVar ebot_check_enemy_invincibility("ebot_check_enemy_invincibility", "0");
 ConVar ebot_aim_trace_consider_glass("ebot_aim_trace_consider_glass", "0");
 ConVar ebot_human_help_breakables("ebot_human_help_breakables", "1");
 ConVar ebot_zombie_help_breakables("ebot_zombie_help_breakables", "1");
+ConVar ebot_human_use_parachute("ebot_human_use_parachute", "0");
 
 extern ConVar ebot_zombie_hp_multiplier;
+extern ConVar ebot_has_semiclip;
+
+static bool IsPointInsideEntityXY(const Vector& point, edict_t* entity) {
+  constexpr float boundsEpsilon = 1.0f;
+
+  return point.x >= entity->v.absmin.x - boundsEpsilon &&
+         point.x <= entity->v.absmax.x + boundsEpsilon &&
+         point.y >= entity->v.absmin.y - boundsEpsilon &&
+         point.y <= entity->v.absmax.y + boundsEpsilon;
+}
+
+static bool IsFuncWaterBelow(const Vector& start, const Vector& end) {
+  edict_t* entity = nullptr;
+  while (!FNullEnt(entity = FIND_ENTITY_BY_CLASSNAME(entity, "func_water"))) {
+    if (!IsPointInsideEntityXY(start, entity))
+      continue;
+
+    if (entity->v.absmax.z < end.z || entity->v.absmin.z > start.z)
+      continue;
+
+    return true;
+  }
+
+  return false;
+}
+
+static bool IsWaterBelowTrace(const Vector& start, const Vector& end,
+                              const TraceResult& trace) {
+  if (trace.fInWater || IsFuncWaterBelow(start, end))
+    return true;
+
+  constexpr float waterProbeStep = 128.0f;
+  for (float z = start.z; z >= end.z; z -= waterProbeStep) {
+    if (POINT_CONTENTS(Vector(start.x, start.y, z)) == CONTENTS_WATER)
+      return true;
+  }
+
+  return POINT_CONTENTS(end) == CONTENTS_WATER;
+}
+
+void ResetPlayerDuckingState(const int playerIndex) {
+
+  g_playerDucking[playerIndex] = false;
+  g_playerDuckingFrom[playerIndex] = 0.0f;
+}
+
+static bool HasStandingPlayerSpaceAboveDuckBoost(edict_t *player) {
+  if (FNullEnt(player))
+    return false;
+
+  constexpr float duckHullHalfHeight = 18.0f;
+  constexpr float standingHullHeight = 72.0f;
+  const Vector boostTraceEnd =
+      player->v.origin + Vector(0.0f, 0.0f,
+                                duckHullHalfHeight + standingHullHeight);
+
+  TraceResult tr{};
+  TraceLine(player->v.origin, boostTraceEnd, TraceIgnore::Monsters, player,
+            &tr);
+
+  return tr.flFraction >= 1.0f;
+}
+
+static void RunBotPlayerMove(edict_t *fakeclient, const float *viewangles,
+                             const float forwardmove, const float sidemove,
+                             const float upmove, const uint16_t buttons,
+                             const uint8_t impulse, const uint8_t msec) {
+  g_engfuncs.pfnRunPlayerMove(fakeclient, viewangles, forwardmove, sidemove,
+                              upmove, buttons, impulse, msec);
+}
+
+static bool IsPlayerOnDoubleJumpWaypoint(edict_t *player,
+                                         const int playerIndex) {
+  Bot *bot = g_botManager->GetBot(player);
+  if (bot && bot->m_isAlive)
+    return bot->m_waypoint.flags & WAYPOINT_DJUMP;
+
+  const int clientIndex = playerIndex - 1;
+  if (clientIndex < 0 || clientIndex >= g_maxClients)
+    return false;
+
+  const int16_t waypointIndex = g_clients[clientIndex].wp;
+  return IsValidWaypoint(waypointIndex) &&
+         (g_waypoint->GetPath(waypointIndex)->flags & WAYPOINT_DJUMP);
+}
+
+static void UpdatePlayerDuckingState(edict_t *player, const int playerIndex,
+                                     const float time) {
+  constexpr float duckOnlyHoldTime = 1.0f;
+
+  if (player->v.movetype == MOVETYPE_FLY) {
+    ResetPlayerDuckingState(playerIndex);
+    return;
+  }
+
+  const int buttons = player->v.buttons;
+  const bool isDucking =
+      (buttons & IN_DUCK) && !(buttons & (IN_FORWARD | IN_BACK | IN_MOVELEFT | IN_MOVERIGHT | IN_JUMP));
+  if (!isDucking) {
+    ResetPlayerDuckingState(playerIndex);
+    return;
+  }
+
+  if (g_playerDuckingFrom[playerIndex] <= 0.0f)
+    g_playerDuckingFrom[playerIndex] = time;
+
+  const bool hasHeldDuck = time - g_playerDuckingFrom[playerIndex] >= duckOnlyHoldTime;
+  if (hasHeldDuck && !HasStandingPlayerSpaceAboveDuckBoost(player)) {
+    ResetPlayerDuckingState(playerIndex);
+    return;
+  }
+
+  g_playerDucking[playerIndex] = hasHeldDuck;
+}
+
+// Update fast-changing cached client state used by movement, semiclip, and bots.
+void UpdateClientInfoFast(void) {
+  const float time = engine->GetTime();
+  const bool updateDucking = SemiclipHooksEnabled() && SemiclipDuckBoostEnabled();
+
+  for (int playerIndex = 1; playerIndex <= g_maxClients && playerIndex < 33;
+       ++playerIndex) {
+    edict_t *player = INDEXENT(playerIndex);
+    const int clientIndex = playerIndex - 1;
+
+    // Drop stale cache data for disconnected or not yet initialized client slots.
+    if (!IsValidPlayer(player)) {
+      g_clients[clientIndex].team = Team::Count;
+      if (updateDucking)
+        ResetPlayerDuckingState(playerIndex);
+      continue;
+    }
+
+    // Refresh the cached team every fast tick so semiclip and bot logic can use
+    // cheap cached lookups instead of reading private player data repeatedly.
+    const int oldTeam = g_clients[clientIndex].team;
+    g_clients[clientIndex].team = GetTeam(player);
+
+    // Keep bot team state synchronized with the same cache used by real players.
+    Bot* const bot = g_botManager->GetBot(player);
+    if (bot) {
+        bot->m_team = g_clients[clientIndex].team;
+    }
+
+    // Dead players cannot need live-player semiclip or duck boost handling.
+    if (!IsAlive(player)) {
+      if (updateDucking)
+        ResetPlayerDuckingState(playerIndex);
+      continue;
+    }
+
+
+    // When a player changes team while intersecting someone they were already
+    // semiclipping with, enable a short temporary pair semiclip to prevent
+    // the engine from pushing either player upward through the ceiling.
+    if (oldTeam != g_clients[clientIndex].team)
+    {
+        if(SemiclipHooksEnabled())
+            SemiclipCheckChangedConditions(player, playerIndex, g_clients[clientIndex].team, time);
+
+        if (bot) {
+            bot->ClearRadioFollow();
+            bot->ClearRadioHoldPosition();
+        }
+    }
+
+    // Keep that temporary pair semiclip alive while the players are still
+    // touching. This runs at the fast cache tick rate instead of every PM_Move.
+    if (SemiclipHooksEnabled())
+        SemiclipRefreshChangedConditions(player, playerIndex, g_clients[clientIndex].team, time);
+
+    // Update cached duck-only state used by semiclip boost logic, or clear it
+    // when the player's current team is not allowed to use duck boost.
+    if (updateDucking) {
+      if (SemiclipDuckBoostAllowedForTeam(g_clients[clientIndex].team)) {
+        if (bot && !IsPlayerOnDoubleJumpWaypoint(player, playerIndex) &&
+            !HasStandingPlayerSpaceAboveDuckBoost(player)) {
+          ResetPlayerDuckingState(playerIndex);
+          continue;
+        }
+
+        if(!bot)
+            UpdatePlayerDuckingState(player, playerIndex, time);
+        else if (bot && bot->m_zombieBoostDuckUntil <= time && g_playerDucking[playerIndex])
+            ResetPlayerDuckingState(playerIndex);
+      }
+      else
+        ResetPlayerDuckingState(playerIndex);
+    }
+  }
+}
 
 float Bot::InFieldOfView(const Vector &destination) {
   const float absoluteAngle =
@@ -65,7 +257,8 @@ bool Bot::CheckVisibility(edict_t *targetEntity) {
 
   const int ignoreFlags =
       m_isZombieBot
-          ? TraceIgnore::Nothing
+          ? (ebot_has_semiclip.GetBool() ? TraceIgnore::Monsters
+                                         : TraceIgnore::Nothing)
           : (ebot_aim_trace_consider_glass.GetBool() ? TraceIgnore::Monsters
                                                      : TraceIgnore::Everything);
   TraceLine(eyes, spot, ignoreFlags, m_myself, &tr);
@@ -642,6 +835,49 @@ bool Bot::IsLadderJumpNoInputActive(const float time) {
          m_ladderJumpNoInputStartTime <= time;
 }
 
+void Bot::UpdateHumanParachuteUse(const float time) {
+  constexpr float parachuteCheckDelay = 0.6f;
+  constexpr float parachuteFallVelocity = 500.0f;
+  constexpr float parachuteTraceDepth = 4096.0f;
+
+  if (m_isZombieBot || !m_isAlive || !ebot_human_use_parachute.GetBool()) {
+    m_airborneStartTime = 0.0f;
+    m_humanParachuteActive = false;
+    return;
+  }
+
+  const bool inAir =
+      !IsOnFloor() && !IsOnLadder() && pev->waterlevel <= 0;
+  if (!inAir) {
+    m_airborneStartTime = 0.0f;
+    m_humanParachuteActive = false;
+    return;
+  }
+
+  if (m_humanParachuteActive) {
+    m_buttons |= IN_USE;
+    return;
+  }
+
+  if (m_airborneStartTime <= 0.0f)
+    m_airborneStartTime = time;
+  else if (time - m_airborneStartTime > parachuteCheckDelay) {
+    const Vector traceEnd =
+        pev->origin - Vector(0.0f, 0.0f, parachuteTraceDepth);
+    TraceResult tr;
+    TraceLine(pev->origin, traceEnd, TraceIgnore::Monsters, m_myself, &tr);
+
+    if (IsWaterBelowTrace(pev->origin, tr.vecEndPos, tr))
+      return;
+
+    if (pev->flFallVelocity <= parachuteFallVelocity)
+      return;
+
+    m_humanParachuteActive = true;
+    m_buttons |= IN_USE;
+  }
+}
+
 void Bot::BaseUpdate(void) {
   if (!pev)
     return;
@@ -661,7 +897,7 @@ void Bot::BaseUpdate(void) {
 
   const float tempTimer = engine->GetTime();
 
-  if (m_baseUpdate < tempTimer) {
+  if (m_baseUpdate < tempTimer) { //update every 0.1s
     // avoid frame drops
     m_frameInterval = tempTimer - m_frameDelay;
     m_frameDelay = tempTimer;
@@ -700,6 +936,8 @@ void Bot::BaseUpdate(void) {
           m_strafeSpeed = 0.0f;
           UpdateProcess();
           MoveAction();
+          HandleZombieBoost();
+          UpdateHumanParachuteUse(tempTimer);
         } else {
           m_moveSpeed = 0.0f;
           m_strafeSpeed = 0.0f;
@@ -720,7 +958,7 @@ void Bot::BaseUpdate(void) {
         if (!m_isZombieBot && m_hasEnemiesNear) {
           const bool hasValidEnemy =
               !FNullEnt(m_nearestEnemy) && IsAlive(m_nearestEnemy) &&
-              GetTeam(m_nearestEnemy) != m_team;
+              GetCachedPlayerTeam(m_nearestEnemy) != m_team;
           const bool boostSlowThink =
               hasValidEnemy &&
               (pev->origin - m_nearestEnemy->v.origin).GetLengthSquared2D() <=
@@ -767,8 +1005,8 @@ void Bot::BaseUpdate(void) {
         m_lookYawVel = 0.0f;
         m_lookPitchVel = 0.0f;
         m_msecInterval = tempTimer;
-        g_engfuncs.pfnRunPlayerMove(m_myself, pev->v_angle, 0.0f, 0.0f,
-                                    0.0f, 0, 0, m_msecVal);
+        RunBotPlayerMove(m_myself, pev->v_angle, 0.0f, 0.0f, 0.0f, 0, 0,
+                         m_msecVal);
         return;
       }
 
@@ -777,7 +1015,11 @@ void Bot::BaseUpdate(void) {
 
       m_msecInterval = tempTimer;
 
-      if (ShouldHoldHumanCampForGrenadeThrow()) {
+      if (m_zombieBoostDuckUntil > tempTimer) {
+        m_buttons = IN_DUCK;
+        m_moveSpeed = 0.0f;
+        m_strafeSpeed = 0.0f;
+      } else if (ShouldHoldHumanCampForGrenadeThrow()) {
         HoldHumanCampForGrenadeThrow();
       } else if (m_navNode.CanFollowPath() && CheckWaypoint()) {
         m_strafeSpeed = 0.0f;
@@ -820,9 +1062,9 @@ void Bot::BaseUpdate(void) {
           m_lastAt = m_lookAt;
         } else {
           if (IsInViewCone(m_lookAt)) {
-            g_engfuncs.pfnRunPlayerMove(m_myself, m_moveAngles, m_moveSpeed,
-                                        m_strafeSpeed, 0.0f, m_buttons,
-                                        m_impulse, m_msecVal);
+            RunBotPlayerMove(m_myself, m_moveAngles, m_moveSpeed,
+                             m_strafeSpeed, 0.0f, m_buttons, m_impulse,
+                             m_msecVal);
             return;
           } else {
             m_updateY = true;
@@ -878,9 +1120,8 @@ void Bot::BaseUpdate(void) {
       pev->angles.ClampAngles();
     }
 
-    g_engfuncs.pfnRunPlayerMove(m_myself, m_moveAngles, m_moveSpeed,
-                                m_strafeSpeed, 0.0f, m_buttons, m_impulse,
-                                m_msecVal);
+    RunBotPlayerMove(m_myself, m_moveAngles, m_moveSpeed, m_strafeSpeed, 0.0f,
+                     m_buttons, m_impulse, m_msecVal);
   }
 }
 
@@ -916,6 +1157,165 @@ inline int GetMaxClip(const int &id) {
   }
 
   return 27;
+}
+
+/// <summary>
+/// Handles zombie-only boost source waypoints. Human bots avoid WAYPOINT_DJUMP
+/// during pathfinding; zombie bots can use it when a teammate is close enough
+/// to benefit from the boost.
+/// </summary>
+bool Bot::HandleZombieBoost(void) {
+
+  if (!m_isZombieBot)
+    return false;
+
+   // Only WAYPOINT_DJUMP source waypoints can start this special boost duck.
+   if (!(m_waypoint.flags & WAYPOINT_DJUMP)) 
+       return false;
+
+  // Respect duck boost team configuration before changing movement or cache state.
+  if (!SemiclipDuckBoostAllowedForTeam(m_team)) {
+        return false;
+  }
+
+  const float time = engine->GetTime();
+  const int playerIndex = FNullEnt(m_myself) ? 0 : ENTINDEX(m_myself);
+
+  // Once started, keep the bot stationary and ducking for the whole boost window.
+  if (m_zombieBoostDuckUntil > time) {
+    m_buttons = IN_DUCK;
+    m_moveSpeed = 0.0f;
+    m_strafeSpeed = 0.0f;
+    return true;
+  }
+
+  if (!(IsOnFloor() && ((pev->origin - m_waypoint.origin).GetLengthSquared() < squaredf(48.0f))))
+    return false;
+
+  // Require at least one nearby teammate. If another teammate is already
+  // ducking for boost, this bot can continue normally and use that boost.
+  bool hasNearbyTeammate = false;
+  bool hasDuckingTeammate = false;
+  for (const auto &client : g_clients) {
+    if (!(client.flags & CFLAG_USED) || !(client.flags & CFLAG_ALIVE) ||
+        FNullEnt(client.ent) || client.ent == m_myself)
+      continue;
+
+    if (client.team != m_team)
+      continue;
+
+    if ((client.ent->v.origin - m_waypoint.origin).GetLengthSquared() >
+        squaredf(72.0f))
+      continue;
+
+    hasNearbyTeammate = true;
+    const int teammatePlayerIndex = ENTINDEX(client.ent);
+    if (teammatePlayerIndex > 0 && teammatePlayerIndex <= g_maxClients &&
+        teammatePlayerIndex < 33 && g_playerDucking[teammatePlayerIndex]) {
+      hasDuckingTeammate = true;
+      break;
+    }
+  }
+
+  if (!hasNearbyTeammate)
+      return false;
+
+  if (hasDuckingTeammate) 
+    return true;
+
+  // This bot becomes the booster only if there is enough standing room above it.
+  if (m_zombieBoostDuckUntil <= time) {
+    if (!HasStandingPlayerSpaceAboveDuckBoost(m_myself)) {
+      ResetPlayerDuckingState(playerIndex);
+      return false;
+    }
+
+    m_zombieBoostDuckUntil = time + 10.0f;
+    m_duckTime = m_zombieBoostDuckUntil;
+    if (SemiclipHooksEnabled()) {
+      // Semiclip uses this cache to render the booster and keep boost pairs solid.
+      g_playerDucking[playerIndex] = true; // immediately activate semiclip boost
+      g_playerDuckingFrom[playerIndex] = time - 1.0f;
+    }
+
+    if (ebot_debug.GetBool()) {
+      ServerPrint("%s zombie boost: holding duck for 10.0s (wpt %d)",
+                  GetEntityName(m_myself), m_currentWaypointIndex);
+    }
+  }
+
+  // Override regular navigation while this bot is acting as the boost platform.
+  m_buttons = IN_DUCK;
+  m_moveSpeed = 0.0f;
+  m_strafeSpeed = 0.0f;
+  return true;
+}
+
+static void CheckNearbyHumanBreakableToWaypoint(Bot* bot, const float time)
+{
+  if (!bot || !bot->m_isAlive || bot->m_isZombieBot || !bot->pev ||
+      FNullEnt(bot->m_myself) || !g_waypoint)
+    return;
+
+  if (bot->GetCurrentState() != Process::Default &&
+      bot->GetCurrentState() != Process::Pause)
+    return;
+
+  if (bot->m_currentProcess == Process::DestroyBreakable)
+    return;
+
+  const int16_t waypointIndex = !bot->m_navNode.IsEmpty()
+                                    ? bot->m_navNode.First()
+                                    : bot->m_currentWaypointIndex;
+  if (!IsValidWaypoint(waypointIndex))
+    return;
+
+  const Path* const waypoint = g_waypoint->GetPath(waypointIndex);
+  if (!waypoint)
+    return;
+
+  constexpr float breakableSearchRadius = 120.0f;
+  edict_t* entity = nullptr;
+  while (!FNullEnt(entity = FIND_ENTITY_IN_SPHERE(
+                       entity, bot->pev->origin, breakableSearchRadius))) {
+    const int entityIndex = ENTINDEX(entity);
+    if (entityIndex > 0 && entityIndex <= g_maxClients)
+      continue;
+
+    if (!IsBreakableTarget(entity, true))
+      continue;
+
+    const Vector breakableOrigin = GetBoxOrigin(entity);
+    if (bot->pev->origin.z > breakableOrigin.z &&
+        waypoint->origin.z >= bot->pev->origin.z)
+      continue;
+
+    TraceResult tr;
+    TraceLine(bot->EyePosition(), waypoint->origin, TraceIgnore::Nothing,
+              bot->m_myself, &tr);
+    const bool eyeTraceHitsBreakable =
+        !FNullEnt(tr.pHit) && tr.pHit == entity;
+
+    TraceHull(bot->pev->origin, waypoint->origin, TraceIgnore::Nothing,
+              head_hull, bot->m_myself, &tr);
+    const bool hullTraceHitsBreakable =
+        !FNullEnt(tr.pHit) && tr.pHit == entity;
+
+    if (!eyeTraceHitsBreakable && !hullTraceHitsBreakable)
+      continue;
+
+    const bool entityWasIgnored = entity == bot->m_ignoreEntity;
+    if (entityWasIgnored)
+      bot->m_ignoreEntity = nullptr;
+
+    bot->m_breakableEntity = entity;
+    bot->m_breakableOrigin = breakableOrigin;
+    bot->m_breakableJumpTime = 0.0f;
+    bot->SetProcess(Process::DestroyBreakable,
+                    "nearby human breakable blocks next waypoint", false,
+                    time + 20.0f);
+    return;
+  }
 }
 
 void Bot::CheckSlowThink(void) {
@@ -1020,6 +1420,8 @@ void Bot::CheckSlowThink(void) {
           SelectKnife();
       }
     }
+
+    CheckNearbyHumanBreakableToWaypoint(this, tempTimer);
 
     if (ebot_human_help_breakables.GetBool() && m_isAlive &&
         (GetCurrentState() == Process::Default ||
@@ -1140,14 +1542,6 @@ void Bot::CheckSlowThink(void) {
     m_hasFriendsNear = false;
     m_nearestEnemy = nullptr;
   } else {
-    const int currentTeam = GetTeam(m_myself);
-    if (m_team != currentTeam)
-    {
-      ClearRadioFollow();
-      ClearRadioHoldPosition();
-    }
-
-    m_team = currentTeam;
     const bool isZombieEntity = IsZombieEntity(m_myself);
     if (m_isZombieBot != isZombieEntity) {
       const bool wasZombie = m_isZombieBot;
@@ -1284,7 +1678,7 @@ void Bot::UpdateLooking(void) {
   }
 
   if (m_enemySeeTime + 8.0f > engine->GetTime() &&
-      m_team != GetTeam(m_nearestEnemy)) {
+      m_team != GetCachedPlayerTeam(m_nearestEnemy)) {
     if (IsAlive(m_nearestEnemy))
       LookAt(m_nearestEnemy->v.origin + m_nearestEnemy->v.view_ofs,
              m_nearestEnemy->v.velocity);
@@ -1588,6 +1982,12 @@ void Bot::MoveAction(void) {
 
     if (m_duckTime > engine->GetTime())
       m_buttons |= IN_DUCK;
+  }
+
+  if (m_zombieBoostDuckUntil > time) {
+    m_buttons = IN_DUCK;
+    m_moveSpeed = 0.0f;
+    m_strafeSpeed = 0.0f;
   }
 }
 

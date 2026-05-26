@@ -229,6 +229,12 @@ inline int cstrlen(const char* str)
 	return i;
 }
 
+constexpr uint32_t cfnv1a32(const char* str, const uint32_t hash = 0x811c9dc5u)
+{
+	return (!str || *str == '\0') ? hash :
+		cfnv1a32(str + 1, (hash ^ static_cast<uint32_t>(static_cast<unsigned char>(*str))) * 0x1000193u);
+}
+
 inline int cstrcmp(const char* str1, const char* str2)
 {
 	if (!str1)

@@ -28,8 +28,8 @@
 #define PRODUCT_DEV_VERSION_FORTEST ""
 
 // E-Bot Version
-#define PRODUCT_VERSION_DWORD 115,20260511,11 // yyyy/mm/dd
-#define PRODUCT_VERSION "1.15"
+#define PRODUCT_VERSION_DWORD 115,20260523,11 // yyyy/mm/dd
+#define PRODUCT_VERSION "1.15k"
 #define PRODUCT_VERSION_F 1.15
 
 // general product information
