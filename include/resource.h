@@ -35,7 +35,7 @@
 // general product information
 #define PRODUCT_NAME "E-BOT"
 #define PRODUCT_AUTHOR "kotelgg"
-#define PRODUCT_URL "https://github.com/blatouchm/CS-EBOT"
+#define PRODUCT_URL "https://github.com/kotelgg/CS-EBOT"
 #define PRODUCT_EMAIL "cs.kotel@seznam.cz"
 #define PRODUCT_LOGTAG "ebot"
 #define PRODUCT_DESCRIPTION "AI bot for Counter-Strike 1.6"
