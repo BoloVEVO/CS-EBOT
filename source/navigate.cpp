@@ -69,7 +69,10 @@ static inline bool ShouldUseDoubleJumpForGoal(const Bot* bot, const Vector& goal
     return false;
 
   const float goalHeight = goal.z - bot->pev->origin.z;
-  return goalHeight > baseJumpHeight && goalHeight < (baseJumpHeight * 2.0f);
+  constexpr float doubleJumpMinDistance = 220.0f;
+  return goalHeight > baseJumpHeight ||
+         (goal - bot->pev->origin).GetLengthSquared2D() >
+             squaredf(doubleJumpMinDistance);
 }
 
 static inline void TryStartDoubleJump(Bot* bot, const Vector& goal) {
@@ -96,6 +99,9 @@ static inline bool ProcessDoubleJump(Bot* bot) {
   const bool inWater = bot->pev->waterlevel > 2;
 
   if (!onFloor && !onLadder && !inWater) {
+    if (ebot_debug_jump.GetBool())
+      ServerPrint("%s double jump executed in air", GetEntityName(bot->m_myself));
+
     bot->m_doubleJumpPending = false;
     bot->m_doubleJumpTime = 0.0f;
     return true;
@@ -122,9 +128,6 @@ static bool HasDuckingTeammateOnDoubleJumpSource(const Bot* bot) {
   const Path* const sourcePath = g_waypoint->GetPath(sourceIndex);
   const Path* const targetPath = g_waypoint->GetPath(targetIndex);
   if (!sourcePath || !targetPath || !(sourcePath->flags & WAYPOINT_DJUMP))
-    return false;
-
-  if (targetPath->origin.z <= sourcePath->origin.z + 1.0f)
     return false;
 
   bool hasDoubleConnection = false;
@@ -792,8 +795,7 @@ void Bot::DoWaypointNav(void) {
         m_buttons |= IN_JUMP;
       } else {
         m_waterJumpHoldEndTime = 0.0f;
-        m_duckTime = jumpStartTime + 1.25f;
-        m_buttons |= (IN_DUCK | IN_JUMP);
+        m_buttons |= IN_JUMP;
       }
 
       if (ebot_debug_jump.GetBool()) {

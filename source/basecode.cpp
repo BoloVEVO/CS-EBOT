@@ -1189,13 +1189,31 @@ bool Bot::HandleZombieBoost(void) {
     return true;
   }
 
-  if (!(IsOnFloor() && ((pev->origin - m_waypoint.origin).GetLengthSquared() < squaredf(48.0f))))
+  constexpr float boostSourceRadius = 48.0f;
+  const bool nearBoostSource3D =
+      (pev->origin - m_waypoint.origin).GetLengthSquared() <
+      squaredf(boostSourceRadius);
+  const bool nearBoostSource2D =
+      (pev->origin - m_waypoint.origin).GetLengthSquared2D() <
+      squaredf(boostSourceRadius);
+
+  if (!g_waypoint || !m_navNode.HasNext())
     return false;
 
-  // Require at least one nearby teammate. If another teammate is already
-  // ducking for boost, this bot can continue normally and use that boost.
+  const Path* const boostTargetPath = g_waypoint->GetPath(m_navNode.Next());
+  constexpr float minBoostTargetHeight = 48.0f;
+  if (!boostTargetPath ||
+      boostTargetPath->origin.z <= pev->origin.z + minBoostTargetHeight)
+    return false;
+
+  // Same-level ducking teammate means this bot can use that boost. A lower
+  // ducking teammate can be chained only when another free teammate is nearby.
   bool hasNearbyTeammate = false;
-  bool hasDuckingTeammate = false;
+  bool hasSameLevelDuckingTeammate = false;
+  bool hasLowerDuckingTeammate = false;
+  bool hasNonDuckingTeammate = false;
+  constexpr float sameLevelDuckBoostZTolerance = 24.0f;
+  constexpr float stackedDuckBoostMinZDelta = 24.0f;
   for (const auto &client : g_clients) {
     if (!(client.flags & CFLAG_USED) || !(client.flags & CFLAG_ALIVE) ||
         FNullEnt(client.ent) || client.ent == m_myself)
@@ -1210,18 +1228,39 @@ bool Bot::HandleZombieBoost(void) {
 
     hasNearbyTeammate = true;
     const int teammatePlayerIndex = ENTINDEX(client.ent);
-    if (teammatePlayerIndex > 0 && teammatePlayerIndex <= g_maxClients &&
-        teammatePlayerIndex < 33 && g_playerDucking[teammatePlayerIndex]) {
-      hasDuckingTeammate = true;
+    const bool teammateDucking =
+        teammatePlayerIndex > 0 && teammatePlayerIndex <= g_maxClients &&
+        teammatePlayerIndex < 33 && g_playerDucking[teammatePlayerIndex];
+
+    if (!teammateDucking) {
+      hasNonDuckingTeammate = true;
+      continue;
+    }
+
+    const float teammateZDelta = pev->origin.z - client.ent->v.origin.z;
+    if (cabsf(teammateZDelta) <= sameLevelDuckBoostZTolerance) {
+      hasSameLevelDuckingTeammate = true;
       break;
     }
+
+    if (teammateZDelta >= stackedDuckBoostMinZDelta &&
+        (pev->groundentity == client.ent || nearBoostSource2D))
+      hasLowerDuckingTeammate = true;
   }
 
   if (!hasNearbyTeammate)
-      return false;
+    return false;
 
-  if (hasDuckingTeammate) 
+  if (hasSameLevelDuckingTeammate)
     return true;
+
+  const bool canStartRegularBoost =
+      IsOnFloor() && nearBoostSource3D && !hasLowerDuckingTeammate;
+  const bool canStartStackedBoost =
+      IsOnFloor() && nearBoostSource2D && hasLowerDuckingTeammate &&
+      hasNonDuckingTeammate;
+  if (!canStartRegularBoost && !canStartStackedBoost)
+    return false;
 
   // This bot becomes the booster only if there is enough standing room above it.
   if (m_zombieBoostDuckUntil <= time) {
