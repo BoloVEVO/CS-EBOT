@@ -58,6 +58,7 @@ ConVar ebot_semiclip_team("ebot_semiclip_team", "3");
 ConVar ebot_duck_boost("ebot_duck_boost", "1");
 ConVar ebot_duck_boost_team("ebot_duck_boost_team", "0");
 ConVar ebot_semiclip_entities("ebot_semiclip_entities", "0");
+ConVar ebot_semiclip_effects("ebot_semiclip_effects", "1");
 
 extern ConVar ebot_has_semiclip;
 extern ConVar ebot_debug;
@@ -202,6 +203,7 @@ static int g_semiclipTeamMode = 3;
 static bool g_semiclipDuckBoostEnabled = true;
 static int g_semiclipDuckBoostTeam = 0;
 static bool g_semiclipEntitiesEnabled = false;
+static bool g_semiclipEffectsEnabled = true;
 
 
 void SemiclipTraceLine_Post(const float *v1, const float *v2, int fNoMonsters, edict_t *pentToSkip, TraceResult *ptr);
@@ -251,6 +253,7 @@ static void SemiclipCacheSettings(void)
 	g_semiclipDuckBoostEnabled = cclamp(ebot_duck_boost.GetInt(), 0, 1) == 1;
 	g_semiclipDuckBoostTeam = cclamp(ebot_duck_boost_team.GetInt(), 0, 2);
 	g_semiclipEntitiesEnabled = cclamp(ebot_semiclip_entities.GetInt(), 0, 1) == 1;
+	g_semiclipEffectsEnabled = cclamp(ebot_semiclip_effects.GetInt(), 0, 1) == 1;
 }
 
 void SemiclipUpdateSettings(void)
@@ -1071,6 +1074,9 @@ int SemiclipAddToFullPack_Post(entity_state_s *state, int e, edict_t *ent, edict
 	{
 		state->solid = SOLID_NOT;
 
+		if (!g_semiclipEffectsEnabled)
+			RETURN_META_VALUE(MRES_IGNORED, 0);
+
 		if (g_playerDucking[entIndex])
 		{
 			state->rendermode = kRenderNormal;
@@ -1090,7 +1096,7 @@ int SemiclipAddToFullPack_Post(entity_state_s *state, int e, edict_t *ent, edict
 		else
 			state->renderamt = 0;
 	}
-	else if(g_playerDucking[entIndex] && g_clients[hostIndex -1].team == g_clients[entIndex - 1].team)
+	else if(g_semiclipEffectsEnabled && g_playerDucking[entIndex] && g_clients[hostIndex -1].team == g_clients[entIndex - 1].team)
 	{		
 		state->rendermode = kRenderNormal;
 		state->renderfx = kRenderFxGlowShell;

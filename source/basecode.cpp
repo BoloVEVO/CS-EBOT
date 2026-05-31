@@ -2379,7 +2379,7 @@ Vector Bot::CheckBotToss(const Vector &start, const Vector &stop) {
   const Vector midPointBase =
       Vector(midPoint.x, midPoint.y, cmaxf(start.z, end.z));
   TraceHull(midPointBase, midPoint,
-            TraceIgnore::Nothing, head_hull, m_myself, &tr);
+            TraceIgnore::Monsters, head_hull, m_myself, &tr);
 
   if (tr.flFraction < 1.0f && !FNullEnt(tr.pHit)) {
     midPoint = tr.vecEndPos;
@@ -2403,7 +2403,7 @@ Vector Bot::CheckBotToss(const Vector &start, const Vector &stop) {
   Vector apex = start + velocity * timeOne;
   apex.z = midPoint.z;
 
-  TraceHull(start, apex, TraceIgnore::Nothing, head_hull, m_myself, &tr);
+  TraceHull(start, apex, TraceIgnore::Monsters, head_hull, m_myself, &tr);
   if (tr.flFraction < 1.0f || tr.fAllSolid)
     return nullvec;
 
@@ -2444,7 +2444,7 @@ Vector Bot::CheckBotThrow(const Vector &start, const Vector &end) {
            0.5f * gravity * apexTime * apexTime;
 
   TraceResult tr;
-  TraceHull(start, apex, TraceIgnore::Nothing, head_hull, m_myself, &tr);
+  TraceHull(start, apex, TraceIgnore::Monsters, head_hull, m_myself, &tr);
   if (tr.flFraction < 1.0f)
     return nullvec;
 

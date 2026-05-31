@@ -1138,6 +1138,7 @@ public:
 
 // prototypes of bot functions...
 extern int GetTeam(edict_t *ent);
+extern int GetRealTeam(edict_t *ent);
 extern int GetCachedPlayerTeam(const int index);
 extern int GetCachedPlayerTeam(edict_t *ent);
 extern bool IsNativeBreakable(edict_t *ent);

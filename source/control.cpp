@@ -1048,6 +1048,8 @@ void Bot::Kick(void)
 // this function handles the selection of teams & class
 void Bot::StartGame(void)
 {
+	m_team = GetRealTeam(m_myself);
+
 	// check if something has assigned team to us
 	if ((m_team == Team::Terrorist || m_team == Team::Counter) && IsAlive(m_myself))
 	{
@@ -1074,16 +1076,15 @@ void Bot::StartGame(void)
 			m_wantedTeam = 1;
 
 		if (m_wantedTeam != 1 && m_wantedTeam != 2)
-			m_wantedTeam = crandomint(1, 2);
+			m_wantedTeam = 5;
 
 		if (m_wantedClass < 1 || m_wantedClass > (g_gameVersion & Game::CZero ? 5 : 4))
 			m_wantedClass = crandomint(1, g_gameVersion & Game::CZero ? 5 : 4);
 
 		// select the team the bot wishes to join...
 		g_fakeCommandTimer = 0.0f;
-		FakeClientCommand(m_myself, "jointeam %d; joinclass %d", m_wantedTeam, m_wantedClass); //This is equivalent to Exolent’s Team Join Management plugin.
-		m_notStarted = false;
-		m_startAction = CMENU_IDLE;
+		FakeClientCommand(m_myself, "jointeam %d", m_wantedTeam); // This is equivalent to Exolent's Team Join Management plugin.
+
 		return;
 	}
 
@@ -1092,12 +1093,9 @@ void Bot::StartGame(void)
 		if (m_wantedClass < 1 || m_wantedClass > (g_gameVersion & Game::CZero ? 5 : 4))
 			m_wantedClass = crandomint(1, g_gameVersion & Game::CZero ? 5 : 4);
 
-		// select the class the bot wishes to use...
 		g_fakeCommandTimer = 0.0f;
 		FakeClientCommand(m_myself, "joinclass %d", m_wantedClass);
 
-		// bot has now joined the game (doesn't need to be started)
-		m_notStarted = false;
-		m_startAction = CMENU_IDLE; // switch back to idle
+		return;
 	}
 }

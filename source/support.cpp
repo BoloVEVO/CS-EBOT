@@ -936,6 +936,18 @@ bool IsNativeBreakable(edict_t* ent)
 	return false;
 }
 
+int GetRealTeam(edict_t* ent)
+{
+	if (FNullEnt(ent) || !ent->pvPrivateData)
+		return Team::Count;
+
+	const int* teamPtr = reinterpret_cast<int*>(ent->pvPrivateData) + OFFSET_TEAM;
+	if (*teamPtr > 0)
+		return (*teamPtr - 1);
+
+	return Team::Count;
+}
+
 // new get team off set, return player true team
 int GetTeam(edict_t* ent)
 {
