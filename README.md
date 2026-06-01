@@ -149,6 +149,3 @@ Path commands (`ebot path`, aliases: `ebot pathwaypoint`, `ebot pwp`):
 
 Autowaypoint commands:
 - `ebot autowp on` / `ebot autowp off` (alias: `ebot autowaypoint`) - toggle auto waypointing.
-
-Notes:
-- A few legacy names printed by old help text can be no-op in this branch.
