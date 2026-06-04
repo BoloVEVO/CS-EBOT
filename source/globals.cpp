@@ -36,11 +36,14 @@ bool g_hasDoors = false;
 bool g_isFakeCommand = false;
 bool g_isMatrixReady = false;
 bool g_isMatrixCalculating = false;
+bool g_playerDucking[33]{ false };
 
 float g_autoPathDistance = 160.0f;
+float g_autoDeleteDistance = 0.0f;
 float g_fakePingUpdate = 0.0f;
 float g_DelayTimer = 0.0f;
 float g_fakeCommandTimer = 0.0f;
+float g_playerDuckingFrom[33]{ 0 };
 
 int g_maxClients = 0;
 int g_storeAddbotVars[4];
@@ -48,6 +51,7 @@ int g_fakeArgc = 0;
 int g_gameVersion = Game::CStrike;
 int16_t g_numWaypoints = 0;
 int g_playerCurrentWeapon[33]{0};
+int g_entityTargetMask[Const_MaxEntities]{0};
 
 int g_modelIndexLaser = 0;
 int g_modelIndexArrow = 0;

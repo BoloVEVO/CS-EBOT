@@ -62,7 +62,7 @@ void Bot::DefaultUpdate(void)
 		}
 
 		// nearest enemy never resets to nullptr, so bot always know where are alive humans
-		if (IsAlive(m_nearestEnemy) && GetTeam(m_nearestEnemy) != m_team)
+		if (IsAlive(m_nearestEnemy) && GetCachedPlayerTeam(m_nearestEnemy) != m_team)
 		{
 			if (m_isSlowThink)
 			{
@@ -177,7 +177,7 @@ void Bot::DefaultUpdate(void)
 			{
 				for (auto bot : g_botManager->m_bots)
 				{
-					if (bot && bot->m_team == m_team && bot->m_hasEnemiesNear && IsAlive(bot->m_nearestEnemy) && GetTeam(bot->m_nearestEnemy) != m_team)
+					if (bot && bot->m_team == m_team && bot->m_hasEnemiesNear && IsAlive(bot->m_nearestEnemy) && GetCachedPlayerTeam(bot->m_nearestEnemy) != m_team)
 					{
 						m_nearestEnemy = bot->m_nearestEnemy;
 						return;
@@ -284,7 +284,7 @@ void Bot::DefaultUpdate(void)
 				if (!m_navNode.HasNext())
 				{
 					// find new safe spot
-					DebugHumanCampLeaveForZombie(this, "reachable zombie");
+				//	DebugHumanCampLeaveForZombie(this, "reachable zombie");
 					m_zhCampPointIndex = -1;
 					FindGoalHuman();
 
@@ -316,7 +316,7 @@ void Bot::DefaultUpdate(void)
 					::IsInViewCone(pev->origin, m_nearestEnemy))
 					{
 						// find new safe spot if possible
-						DebugHumanCampLeaveForZombie(this, "zombie closer to escape path");
+					//	DebugHumanCampLeaveForZombie(this, "zombie closer to escape path");
 						m_zhCampPointIndex = -1;
 						FindGoalHuman();
 

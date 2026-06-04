@@ -162,6 +162,18 @@ void NetworkMsg::Execute(void* p)
 					}
 				}
 			}
+			/*else //real player ?
+			{
+				//It seems that only the team selection menu can be intercepted.
+				if (m_index > 0 && m_index < 33)
+				{
+					edict_t* player = INDEXENT(m_index);
+					if (!FNullEnt(player))
+						ServerPrint("NETMSG_SHOWMENU opened for %s (index %d).", GetEntityName(player), m_index);
+					else
+						ServerPrint("NETMSG_SHOWMENU opened for player index %d, but entity was not found.", m_index);
+				}	
+			}*/
 
 			break;
 		}
@@ -217,10 +229,10 @@ void NetworkMsg::Execute(void* p)
 			}
 			break;
 		}
-			case NETMSG_CURWEAPON:
-			{
-				// this message is sent when a weapon is selected (either by the bot chosing a weapon or by the server auto assigning the bot a weapon). In CS it's also called when Ammo is increased/decreased
-				switch (m_state)
+		case NETMSG_CURWEAPON:
+		{
+			// this message is sent when a weapon is selected (either by the bot chosing a weapon or by the server auto assigning the bot a weapon). In CS it's also called when Ammo is increased/decreased
+			switch (m_state)
 			{
 				case 0:
 				{
@@ -232,27 +244,27 @@ void NetworkMsg::Execute(void* p)
 					id = PTR_TO_INT(p); // weapon ID of current weapon
 					break;
 				}
-					case 2:
+				case 2:
+				{
+					if (m_bot)
 					{
-						if (m_bot)
+						if (id >= 0 && id <= Const_MaxWeapons)
 						{
-							if (id >= 0 && id <= Const_MaxWeapons)
-							{
-								if (state != 0)
-									m_bot->m_currentWeapon = id;
+							if (state != 0)
+								m_bot->m_currentWeapon = id;
 
-								m_bot->m_ammoInClip[id] = PTR_TO_INT(p);
-							}
+							m_bot->m_ammoInClip[id] = PTR_TO_INT(p);
 						}
-
-						if (m_index > 0 && m_index < 33 &&
-							id >= 0 && id <= Const_MaxWeapons && state != 0)
-							g_playerCurrentWeapon[m_index] = id;
-						break;
 					}
+
+					if (m_index > 0 && m_index < 33 &&
+						id >= 0 && id <= Const_MaxWeapons && state != 0)
+						g_playerCurrentWeapon[m_index] = id;
+					break;
 				}
-				break;
 			}
+			break;
+		}
 		case NETMSG_AMMOX:
 		{
 			switch (m_state)
