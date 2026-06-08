@@ -14,6 +14,30 @@ AI Bot for Counter-Strike based on SyPB, this bot is only for zombie plague/esca
 
 <br>
 
+### Features
+- included semiclip
+- auto wp generator
+- API bridge for amxx
+- zombie bots can destroy custom breakables
+- hp multiplier for zombie bots
+- damage multiplier to func_breakables
+- human bots can use double jump
+- radio commands
+- support for parachute plugin (example parachute plugin included in release)
+
+### **Semiclip features**
+- team filter
+- filter for bots, players
+- duck boost support for zombie boost + team filter
+- players marked as ducking for boost are highlighted with an orange glow
+- unstuck handling for players who end up stuck inside another player after spawning, teleporting, or changing teams
+- knife trace correction for zombie attacks during semiclip
+- human bots can shoot or knife breakable entities even while inside teammates due to semiclip
+- optional semiclip handling for registered non-player entities
+- this feature was implemented to keep CPU usage as low as possible
+
+<br>
+
 # How to install
 1. Download & install metamod if you dont have.
 2. Download latest ebot release.
