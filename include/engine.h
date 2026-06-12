@@ -2784,6 +2784,7 @@ private:
 	{
 		GVAR_GRAVITY = 0,
 		GVAR_DEVELOPER,
+		GVAR_FREEFORALL,
 		GVAR_NUM
 	};
 private:
@@ -2805,6 +2806,7 @@ public:
 	void BuildGlobalVectors(const Vector& on);
 	int GetGravity(void);
 	int GetDeveloperLevel(void);
+	int GetFreeForAll(void);
 	void PrintServer(const char* format, ...);
 	float GetTime(void);
 	int GetMaxClients(void);
