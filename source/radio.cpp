@@ -356,6 +356,58 @@ static Bot* FindNearestRadioBot(edict_t* player, const float searchDistance)
 	return nearestBot;
 }
 
+static Bot* FindNearestZombieBot(edict_t* player)
+{
+	if (!IsRadioSourceValid(player))
+		return nullptr;
+
+	Bot* nearestBot = nullptr;
+	float nearestDistanceSq = 999999999.0f;
+
+	for (Bot* const& bot : g_botManager->m_bots)
+	{
+		if (!bot || !bot->pev || FNullEnt(bot->m_myself))
+			continue;
+
+		if (!bot->m_isAlive || !bot->m_isZombieBot || !IsZombieEntity(bot->m_myself))
+			continue;
+
+		const float distanceSq = (bot->pev->origin - player->v.origin).GetLengthSquared();
+		if (distanceSq >= nearestDistanceSq)
+			continue;
+
+		nearestDistanceSq = distanceSq;
+		nearestBot = bot;
+	}
+
+	return nearestBot;
+}
+
+static void HandleRadioYouTakePoint(edict_t* player)
+{
+	if (!ebot_radio.GetBool() || !IsRadioSourceValid(player))
+		return;
+
+	Bot* bot = FindNearestZombieBot(player);
+	if (!bot)
+		return;
+
+	const float until = engine->GetTime() + 10.0f;
+	bot->m_zombieBoostDuckUntil = until;
+	bot->m_duckTime = until;
+	bot->m_buttons = IN_DUCK;
+	bot->m_moveSpeed = 0.0f;
+	bot->m_strafeSpeed = 0.0f;
+
+	if (SemiclipHooksEnabled()) {
+		const int playerIndex = ENTINDEX(bot->m_myself);
+		g_playerDucking[playerIndex] = true; // immediately activate semiclip boost
+		g_playerDuckingFrom[playerIndex] = engine->GetTime() - 1.0f;
+	}
+
+	BotPlayRadioMessage(bot, RADIO_AFFIRMATIVE);
+}
+
 static void HandleRadioRegroupTeam(edict_t* player)
 {
 	if (!ebot_radio.GetBool() || !IsRadioSourceValid(player))
@@ -411,7 +463,9 @@ void RadioClientCommand(edict_t* ent, const char* command, const char* arg1)
 		return;
 
 	const int radioCommand = selection + 10 * (menu - 1);
-	if (radioCommand == RADIO_FOLLOWME)
+	if (radioCommand == RADIO_YOUTAKEPOINT)
+		HandleRadioYouTakePoint(ent);
+	else if (radioCommand == RADIO_FOLLOWME)
 		ScheduleRadioFollowMe(ent);
 	else if (radioCommand == RADIO_HOLDPOSITION)
 		HandleRadioHoldPosition(ent);
@@ -695,7 +749,7 @@ bool Bot::UpdateRadioFollow(void)
 	}
 
 	if (!m_isAlive || FNullEnt(m_myself) ||
-		!IsAlive(m_radioFollowUser) || GetTeam(m_radioFollowUser) != m_team)
+		!IsAlive(m_radioFollowUser) || GetCachedPlayerTeam(m_radioFollowUser) != m_team)
 	{
 		ClearRadioFollow();
 		return false;
@@ -711,7 +765,7 @@ bool Bot::UpdateRadioFollow(void)
 		}
 	}
 	else if (m_hasEnemiesNear && !FNullEnt(m_nearestEnemy) &&
-		IsAlive(m_nearestEnemy) && GetTeam(m_nearestEnemy) != m_team)
+		IsAlive(m_nearestEnemy) && GetCachedPlayerTeam(m_nearestEnemy) != m_team)
 	{
 		if (m_isEnemyReachable || m_enemyDistance < 450.0f)
 			return false;
@@ -730,7 +784,7 @@ bool Bot::UpdateRadioFollow(void)
 		return true;
 	}
 
-	if (distanceSq <= squaredf(300.0f) && IsVisible(leaderOrigin, m_myself))
+	if (distanceSq <= squaredf(160.0f) && IsVisible(leaderOrigin, m_myself))
 	{
 		m_navNode.Clear();
 		m_currentGoalIndex = -1;
