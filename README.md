@@ -23,7 +23,7 @@ AI Bot for Counter-Strike based on SyPB, this bot is only for zombie plague/esca
 - damage multiplier to func_breakables
 - human bots can use double jump
 - radio commands
-- support for parachute plugin
+- support for parachute plugin (plugin example is in this pack: https://github.com/kotelgg/zp_ebot_pack/releases/tag/ZP-PACK-1.0)
 
 ### **Semiclip features**
 - team filter
