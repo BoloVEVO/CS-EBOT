@@ -3,9 +3,9 @@ AI Bot for Counter-Strike based on SyPB, this bot is only for zombie plague/esca
 
 ### Try bots on public Counter-Strike 1.6 servers
 
-- `csko.cz:27017` — custom zombie based on Zombie Plague (maps are in fog or partial darkness)
-- `csko.cz:27031` — Zombie Plague 4.3 (complete darkness)  
-- `csko.cz:27070` — zombie escape
+- `csko.cz:27017` â€” custom zombie based on Zombie Plague (maps are in fog or partial darkness)
+- `csko.cz:27031` â€” Zombie Plague 4.3 (complete darkness)  
+- `csko.cz:27070` â€” zombie escape
 
   
 <br>
@@ -23,7 +23,7 @@ AI Bot for Counter-Strike based on SyPB, this bot is only for zombie plague/esca
 - damage multiplier to func_breakables
 - human bots can use double jump
 - radio commands
-- support for parachute plugin (example parachute plugin included in release)
+- support for parachute plugin
 
 ### **Semiclip features**
 - team filter
