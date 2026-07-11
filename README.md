@@ -3,14 +3,38 @@ AI Bot for Counter-Strike based on SyPB, this bot is only for zombie plague/esca
 
 ### Try bots on public Counter-Strike 1.6 servers
 
-- `csko.cz:27017` — custom zombie based on Zombie Plague (maps are in fog or partial darkness)
-- `csko.cz:27031` — Zombie Plague 4.3 (complete darkness)  
-- `csko.cz:27070` — zombie escape
+- `csko.cz:27017` â€” custom zombie based on Zombie Plague (maps are in fog or partial darkness)
+- `csko.cz:27031` â€” Zombie Plague 4.3 (complete darkness)  
+- `csko.cz:27070` â€” zombie escape
 
   
 <br>
 
 [Click HERE To Join E-BOT Discord Community](http://discord.gg/v7PesBamXt)
+
+<br>
+
+### Features
+- included semiclip
+- auto wp generator
+- API bridge for amxx
+- zombie bots can destroy custom breakables
+- hp multiplier for zombie bots
+- damage multiplier to func_breakables
+- human bots can use double jump
+- radio commands
+- support for parachute plugin (plugin example is in this pack: https://github.com/kotelgg/zp_ebot_pack/releases/tag/ZP-PACK-1.0)
+
+### **Semiclip features**
+- team filter
+- filter for bots, players
+- duck boost support for zombie boost + team filter
+- players marked as ducking for boost are highlighted with an orange glow
+- unstuck handling for players who end up stuck inside another player after spawning, teleporting, or changing teams
+- knife trace correction for zombie attacks during semiclip
+- human bots can shoot or knife breakable entities even while inside teammates due to semiclip
+- optional semiclip handling for registered non-player entities
+- this feature was implemented to keep CPU usage as low as possible
 
 <br>
 
