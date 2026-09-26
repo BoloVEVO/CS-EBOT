@@ -2772,7 +2772,7 @@ enum NetMsg
 	NETMSG_BOTVOICE = 19,
 	NETMSG_TEAMSCORE = 20,
 	NETMSG_NUM = 21
-};
+	};
 
 class Engine : public Singleton <Engine>
 {

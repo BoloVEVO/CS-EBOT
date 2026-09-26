@@ -36,11 +36,14 @@ extern bool g_hasDoors;
 extern bool g_isFakeCommand;
 extern bool g_isMatrixReady;
 extern bool g_isMatrixCalculating;
+extern bool g_playerDucking[33];
 
 extern float g_autoPathDistance;
+extern float g_autoDeleteDistance;
 extern float g_fakePingUpdate;
 extern float g_DelayTimer;
 extern float g_fakeCommandTimer;
+extern float g_playerDuckingFrom[33];
 
 extern int g_maxClients;
 extern int16_t g_numWaypoints;
@@ -48,6 +51,7 @@ extern int g_gameVersion;
 extern int g_fakeArgc;
 extern int g_storeAddbotVars[4];
 extern int g_playerCurrentWeapon[33];
+extern int g_entityTargetMask[Const_MaxEntities];
 extern int g_modelIndexLaser;
 extern int g_modelIndexArrow;
 extern char g_fakeArgv[256];

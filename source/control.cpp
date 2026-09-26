@@ -263,12 +263,17 @@ Bot* BotControl::GetBot(edict_t* ent)
 void BotControl::Think(void)
 {
 	const float time2 = engine->GetTime();
+	const float updateInterval = 0.025f;
+
 	for (Bot* const& bot : m_bots)
 	{
-		if (bot && bot->m_updateTimer < time2)
+		if (!bot)
+			continue;
+
+		if (bot->m_updateTimer < time2)
 		{
 			bot->BaseUpdate();
-			bot->m_updateTimer = time2 + 0.025f;
+			bot->m_updateTimer = time2 + updateInterval;
 		}
 	}
 }
@@ -277,6 +282,9 @@ void BotControl::SlowFrameCheck(void)
 {
 	const float time2 = engine->GetTime();
 
+	const int realPlayersOnServer = GetRealPlayersNum();
+	SemiclipUpdateSettings();
+
 	const float noAliveHumansDelay = ebot_kill_bots_when_all_humans_dead.GetFloat();
 	if (noAliveHumansDelay <= 0.0f)
 	{
@@ -284,7 +292,6 @@ void BotControl::SlowFrameCheck(void)
 		return;
 	}
 
-	const int realPlayersOnServer = GetHumansNum();
 	if (realPlayersOnServer <= 0)
 	{
 		m_noAliveHumansTime = 0.0f;
@@ -301,7 +308,7 @@ void BotControl::SlowFrameCheck(void)
 		if (!(client.flags & CFLAG_USED) || FNullEnt(client.ent))
 			continue;
 
-		if (client.index < 0 || m_bots[client.index])
+		if (client.index < 0 || m_bots[client.index])  
 			continue;
 
 		if (client.team != Team::Counter)
@@ -460,7 +467,7 @@ void BotControl::InitQuota(void)
 void BotControl::FillServer(int selection, const int personality, const int skill, const int numToAdd)
 {
 	const int maxClients = engine->GetMaxClients();
-	const int getRealPlayersNum = GetHumansNum();
+	const int getRealPlayersNum = GetRealPlayersNum();
 	const int getBotsNum = GetBotsNum();
 
 	if (getBotsNum >= (maxClients - getRealPlayersNum))
@@ -681,7 +688,7 @@ int BotControl::GetBotsNum(void)
 }
 
 // this function returns number of humans playing on the server
-int BotControl::GetHumansNum(void)
+int BotControl::GetRealPlayersNum(void)
 {
 	int count = 0;
 	const int maxClients = cmin(engine->GetMaxClients(), 32);
@@ -694,10 +701,10 @@ int BotControl::GetHumansNum(void)
 		if (!(client.ent->v.flags & FL_CLIENT))
 			continue;
 
-		if (client.ent->v.flags & FL_FAKECLIENT)
+		if (client.ent->v.flags & FL_FAKECLIENT) 
 			continue;
 
-		if (m_bots[i])
+		if (m_bots[i]) 
 			continue;
 
 		if (client.ent->v.flags & FL_PROXY)
@@ -798,6 +805,7 @@ Bot::Bot(edict_t* bot, const int skill, const int personality, const int team, c
 	}
 
 	MDLL_ClientPutInServer(bot);
+	bot->v.flags |= FL_FAKECLIENT; //because engine deletes this flag on some event
 
 	// initialize all the variables for this bot...
 	m_notStarted = true;  // hasn't joined game yet
@@ -879,6 +887,9 @@ Bot::~Bot(void)
 // this function initializes a bot after creation & at the start of each round & and at respawn
 void Bot::BotSpawned(void)
 {
+	if (pev)
+		pev->flags |= FL_FAKECLIENT; //because engine deletes this flag on some event
+
 	// clear all allocated path nodes
 	m_navNode.Clear();
 	m_currentGoalIndex = -1;
@@ -941,6 +952,7 @@ void Bot::BotSpawned(void)
 	m_prevWptIndex[3] = -1;
 
 	m_breakableEntity = nullptr;
+	m_ignoreEntity = nullptr;
 	m_breakableJumpTime = 0.0f;
 	m_buttonEntity = nullptr;
 	m_timeDoorOpen = 0.0f;
@@ -952,6 +964,9 @@ void Bot::BotSpawned(void)
 	m_wpnTimer = 0.0f;
 	m_randomReloadTimer = 0.0f;
 	m_jumpTime = 0.0f;
+	m_airborneStartTime = 0.0f;
+	m_humanParachuteActive = false;
+	m_waterJumpHoldEndTime = 0.0f;
 	m_ladderJumpNoInputStartTime = 0.0f;
 	m_ladderJumpNoInputTime = 0.0f;
 	m_ladderJumpRetryDeadline = 0.0f;
@@ -960,6 +975,7 @@ void Bot::BotSpawned(void)
 	m_ladderJumpInitialPressUsed = false;
 	m_ladderGroundStartTime = 0.0f;
 	m_duckTime = 0.0f;
+	m_zombieBoostDuckUntil = 0.0f;
 	m_doubleJumpPending = false;
 	m_doubleJumpTime = 0.0f;
 
@@ -1032,6 +1048,8 @@ void Bot::Kick(void)
 // this function handles the selection of teams & class
 void Bot::StartGame(void)
 {
+	m_team = GetRealTeam(m_myself);
+
 	// check if something has assigned team to us
 	if ((m_team == Team::Terrorist || m_team == Team::Counter) && IsAlive(m_myself))
 	{
@@ -1060,22 +1078,24 @@ void Bot::StartGame(void)
 		if (m_wantedTeam != 1 && m_wantedTeam != 2)
 			m_wantedTeam = 5;
 
+		if (m_wantedClass < 1 || m_wantedClass > (g_gameVersion & Game::CZero ? 5 : 4))
+			m_wantedClass = crandomint(1, g_gameVersion & Game::CZero ? 5 : 4);
+
 		// select the team the bot wishes to join...
 		g_fakeCommandTimer = 0.0f;
-		FakeClientCommand(m_myself, "menuselect %d", m_wantedTeam);
-		m_startAction = CMENU_TEAM; // switch to team
+		FakeClientCommand(m_myself, "jointeam %d", m_wantedTeam); // This is equivalent to Exolent's Team Join Management plugin.
+
+		return;
 	}
 
 	if (m_startAction == CMENU_CLASS)
 	{
-		m_wantedClass = crandomint(1, g_gameVersion & Game::CZero ? 5 : 4);
+		if (m_wantedClass < 1 || m_wantedClass > (g_gameVersion & Game::CZero ? 5 : 4))
+			m_wantedClass = crandomint(1, g_gameVersion & Game::CZero ? 5 : 4);
 
-		// select the class the bot wishes to use...
 		g_fakeCommandTimer = 0.0f;
-		FakeClientCommand(m_myself, "menuselect %d", m_wantedClass);
+		FakeClientCommand(m_myself, "joinclass %d", m_wantedClass);
 
-		// bot has now joined the game (doesn't need to be started)
-		m_notStarted = false;
-		m_startAction = CMENU_IDLE; // switch back to idle
+		return;
 	}
 }

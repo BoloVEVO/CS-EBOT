@@ -28,14 +28,14 @@
 #define PRODUCT_DEV_VERSION_FORTEST ""
 
 // E-Bot Version
-#define PRODUCT_VERSION_DWORD 115,20260511,11 // yyyy/mm/dd
-#define PRODUCT_VERSION "1.15"
-#define PRODUCT_VERSION_F 1.15
+#define PRODUCT_VERSION_DWORD 116,20260601,11 // yyyy/mm/dd
+#define PRODUCT_VERSION "1.16k"
+#define PRODUCT_VERSION_F 1.16
 
 // general product information
 #define PRODUCT_NAME "E-BOT"
 #define PRODUCT_AUTHOR "kotelgg"
-#define PRODUCT_URL "https://github.com/blatouchm/CS-EBOT"
+#define PRODUCT_URL "https://github.com/kotelgg/CS-EBOT"
 #define PRODUCT_EMAIL "cs.kotel@seznam.cz"
 #define PRODUCT_LOGTAG "ebot"
 #define PRODUCT_DESCRIPTION "AI bot for Counter-Strike 1.6"
