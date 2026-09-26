@@ -1,6 +1,7 @@
 project/build
 project/build_win
 project/.vs/
+project/ebot_debug
 amxx_bridge/build
 amxx_bridge/build_win
 AGENTS.md
