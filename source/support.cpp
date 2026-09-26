@@ -92,14 +92,27 @@ BreakableDamageHook* FindBreakableDamageHook(void** vtable)
 
 	return nullptr;
 }
+}
 
 bool IsBreakableDamageClass(edict_t* ent)
 {
-	return !FNullEnt(ent) &&
-		(FClassnameIs(ent, "func_breakable") ||
-		 FClassnameIs(ent, "func_pushable") ||
-		 FClassnameIs(ent, "func_wall"));
+	if (FNullEnt(ent))
+		return false;
+
+	// Precomputed FNV-1a hashes of classname strings. Keep these as literals
+	// because older C++11 compilers may reject cfnv1a32("...") as constexpr.
+	// Faster than string comparison in every call
+	const uint32_t kFuncBreakable = 0x35ddb2c3u; // "func_breakable"
+	const uint32_t kFuncPushable = 0x4539a444u; // "func_pushable"
+	const uint32_t kFuncWall = 0x73ed779cu; // "func_wall"
+	const uint32_t classHash = cfnv1a32(STRING(ent->v.classname));
+
+	return classHash == kFuncBreakable || classHash == kFuncWall ||
+		(classHash == kFuncPushable && (ent->v.spawnflags & SF_PUSH_BREAKABLE));
 }
+
+namespace
+{
 
 bool MakeVTableEntryWritable(void** entry)
 {
@@ -909,7 +922,7 @@ void RoundInit(void)
 	g_roundEnded = false;
 }
 
-bool IsBreakable(edict_t* ent)
+bool IsNativeBreakable(edict_t* ent)
 {
 	if (FNullEnt(ent))
 		return false;
@@ -921,6 +934,18 @@ bool IsBreakable(edict_t* ent)
 	}
 
 	return false;
+}
+
+int GetRealTeam(edict_t* ent)
+{
+	if (FNullEnt(ent) || !ent->pvPrivateData)
+		return Team::Count;
+
+	const int* teamPtr = reinterpret_cast<int*>(ent->pvPrivateData) + OFFSET_TEAM;
+	if (*teamPtr > 0)
+		return (*teamPtr - 1);
+
+	return Team::Count;
 }
 
 // new get team off set, return player true team
@@ -943,6 +968,22 @@ int GetTeam(edict_t* ent)
 		return (*teamPtr - 1);
 
 	return Team::Count;
+}
+
+int GetCachedPlayerTeam(const int index)
+{
+	if (index <= 0 || index > g_maxClients || index > 32)
+		return Team::Count;
+
+	return g_clients[index - 1].team;
+}
+
+int GetCachedPlayerTeam(edict_t* ent)
+{
+	if (!IsValidPlayer(ent))
+		return Team::Count;
+
+	return GetCachedPlayerTeam(ENTINDEX(ent));
 }
 
 bool IsZombieEntity(edict_t* ent)
@@ -1473,6 +1514,7 @@ bool FindNearestPlayer(void** pvHolder, edict_t* to, const float searchDistance,
 
 	Vector toOrigin = GetEntityOrigin(to);
 	float nearestPlayer = 9999999.0f, distance;
+	const int toTeam = sameTeam ? GetCachedPlayerTeam(to) : Team::Count;
 
 	bool skipPlayer;
 	for (const auto& client : g_clients)
@@ -1484,7 +1526,7 @@ bool FindNearestPlayer(void** pvHolder, edict_t* to, const float searchDistance,
 			continue;
 
 		skipPlayer = false;
-		if (sameTeam && client.team != GetTeam(to)) 
+		if (sameTeam && client.team != toTeam) 
 			skipPlayer = true;
 
 		if (isAlive && !IsAlive(client.ent)) 

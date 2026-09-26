@@ -28,7 +28,7 @@ constexpr int16_t pMax = static_cast<int16_t>(Const_MaxPathIndex);
 ConVar ebot_zombies_as_path_cost("ebot_zombie_count_as_path_cost", "1");
 ConVar ebot_has_semiclip("ebot_has_semiclip", "0");
 ConVar ebot_breakable_health_limit("ebot_breakable_health_limit", "3000.0");
-ConVar ebot_touch_breakable_classnames("ebot_touch_breakable_classnames", "");
+ConVar ebot_custom_breakables("ebot_custom_breakables", "0");
 ConVar ebot_force_shortest_path("ebot_force_shortest_path", "0");
 ConVar ebot_pathfinder_seed_min("ebot_pathfinder_seed_min", "0.9");
 ConVar ebot_pathfinder_seed_max("ebot_pathfinder_seed_max", "1.1");
@@ -41,6 +41,8 @@ extern ConVar ebot_analyze_max_jump_height;
 extern ConVar ebot_human_double_jump;
 extern ConVar ebot_zombie_double_jump;
 extern ConVar ebot_debug;
+
+constexpr float kWaterJumpHoldTime = 3.0f;
 
 static inline bool IsDoubleJumpEnabledForBot(const Bot* bot) {
   if (!bot)
@@ -67,7 +69,10 @@ static inline bool ShouldUseDoubleJumpForGoal(const Bot* bot, const Vector& goal
     return false;
 
   const float goalHeight = goal.z - bot->pev->origin.z;
-  return goalHeight > baseJumpHeight && goalHeight < (baseJumpHeight * 2.0f);
+  constexpr float doubleJumpMinDistance = 220.0f;
+  return goalHeight > baseJumpHeight ||
+         (goal - bot->pev->origin).GetLengthSquared2D() >
+             squaredf(doubleJumpMinDistance);
 }
 
 static inline void TryStartDoubleJump(Bot* bot, const Vector& goal) {
@@ -94,6 +99,9 @@ static inline bool ProcessDoubleJump(Bot* bot) {
   const bool inWater = bot->pev->waterlevel > 2;
 
   if (!onFloor && !onLadder && !inWater) {
+    if (ebot_debug_jump.GetBool())
+      ServerPrint("%s double jump executed in air", GetEntityName(bot->m_myself));
+
     bot->m_doubleJumpPending = false;
     bot->m_doubleJumpTime = 0.0f;
     return true;
@@ -107,67 +115,58 @@ static inline bool ProcessDoubleJump(Bot* bot) {
   return false;
 }
 
-struct TouchBreakableClassCache {
-    char m_raw[256]{ 0 };
-    char m_items[32][64]{};
-    int m_count{ 0 };
+static bool HasDuckingTeammateOnDoubleJumpSource(const Bot* bot) {
+  if (!bot || !bot->pev || FNullEnt(bot->m_myself) ||
+      !g_waypoint || !(bot->m_currentTravelFlags & PATHFLAG_DOUBLE))
+    return false;
 
-    void RefreshIfNeeded(const char* csv) {
-        if (IsNullString(csv))
-            csv = "";
+  const int16_t targetIndex = bot->m_currentWaypointIndex;
+  const int16_t sourceIndex = bot->m_prevWptIndex[1];
+  if (!IsValidWaypoint(sourceIndex) || !IsValidWaypoint(targetIndex))
+    return false;
 
-        if (!cstrcmp(m_raw, csv))
-            return;
+  const Path* const sourcePath = g_waypoint->GetPath(sourceIndex);
+  const Path* const targetPath = g_waypoint->GetPath(targetIndex);
+  if (!sourcePath || !targetPath || !(sourcePath->flags & WAYPOINT_DJUMP))
+    return false;
 
-        cstrncpy(m_raw, csv, sizeof(m_raw));
-        m_raw[sizeof(m_raw) - 1] = '\0';
-        m_count = 0;
-
-        char token[64];
-        int tokenLen = 0;
-        for (int i = 0;; i++) {
-            const char ch = m_raw[i];
-            if (ch == ',' || ch == '\0') {
-                token[tokenLen] = '\0';
-                cstrtrim(token);
-
-                if (!IsNullString(token) &&
-                    m_count < static_cast<int>(sizeof(m_items) / sizeof(m_items[0]))) {
-                    cstrncpy(m_items[m_count], token, sizeof(m_items[m_count]));
-                    m_items[m_count][sizeof(m_items[m_count]) - 1] = '\0';
-                    m_count++;
-                }
-
-                tokenLen = 0;
-                if (ch == '\0')
-                    break;
-                continue;
-            }
-
-            if (tokenLen < static_cast<int>(sizeof(token)) - 1)
-                token[tokenLen++] = ch;
-        }
+  bool hasDoubleConnection = false;
+  for (int16_t i = 0; i < pMax; i++) {
+    if (sourcePath->index[i] == targetIndex &&
+        (sourcePath->connectionFlags[i] & PATHFLAG_DOUBLE)) {
+      hasDoubleConnection = true;
+      break;
     }
+  }
 
-    bool Contains(const char* className) const {
-        if (IsNullString(className))
-            return false;
+  if (!hasDoubleConnection)
+    return false;
 
-        for (int i = 0; i < m_count; i++) {
-            if (!cstricmp(m_items[i], className))
-                return true;
-        }
+  const int selfIndex = ENTINDEX(bot->m_myself);
+  for (int playerIndex = 1; playerIndex <= g_maxClients && playerIndex < 33;
+       playerIndex++) {
+    if (playerIndex == selfIndex || !g_playerDucking[playerIndex])
+      continue;
 
-        return false;
-    }
-};
+    const int clientIndex = playerIndex - 1;
+    const Clients& client = g_clients[clientIndex];
+    if (!(client.flags & CFLAG_USED) || !(client.flags & CFLAG_ALIVE) ||
+        FNullEnt(client.ent) || client.team != bot->m_team)
+      continue;
 
-static TouchBreakableClassCache s_touchBreakableClassCache;
+    if (client.wp == sourceIndex)
+      return true;
 
-static inline bool IsExtraTouchBreakableClass(const char* className) {
-    s_touchBreakableClassCache.RefreshIfNeeded(
-        ebot_touch_breakable_classnames.GetString());
-    return s_touchBreakableClassCache.Contains(className);
+    constexpr float sourceRadius = 54.0f;
+    constexpr float sourceHeightTolerance = 48.0f;
+    if ((client.ent->v.origin - sourcePath->origin).GetLengthSquared2D() <=
+            squaredf(sourceRadius) &&
+        cabsf(client.ent->v.origin.z - sourcePath->origin.z) <=
+            sourceHeightTolerance)
+      return true;
+  }
+
+  return false;
 }
 
 static inline bool IsWaypointUnderBreakable(const edict_t* entity,
@@ -656,7 +655,6 @@ void Bot::DoWaypointNav(void) {
     } else {
       const float distToRetryTargetSq =
           (pev->origin - retryTargetPath->origin).GetLengthSquared();
-      const float distToRetryTarget = csqrtf(distToRetryTargetSq);
       const bool reachedRetryTargetByDistance =
           distToRetryTargetSq <= squaredf(40.0f);
       bool fartherFromSourceThanTarget = true;
@@ -793,13 +791,11 @@ void Bot::DoWaypointNav(void) {
         if (pev->velocity.z < minWaterJumpVelocityZ)
           pev->velocity.z = minWaterJumpVelocityZ;
 
-        m_waterJumpHoldEndTime = jumpStartTime + 1.0f;
+        m_waterJumpHoldEndTime = jumpStartTime + kWaterJumpHoldTime;
         m_buttons |= IN_JUMP;
-        m_buttons &= ~IN_DUCK;
       } else {
         m_waterJumpHoldEndTime = 0.0f;
-        m_duckTime = jumpStartTime + 1.25f;
-        m_buttons |= (IN_DUCK | IN_JUMP);
+        m_buttons |= IN_JUMP;
       }
 
       if (ebot_debug_jump.GetBool()) {
@@ -870,6 +866,14 @@ void Bot::DoWaypointNav(void) {
       m_waterJumpHoldEndTime = 0.0f;
     }
 
+    if (IsInWater()) {
+      m_waitForLanding = false;
+      m_jumpReady = false;
+      m_doubleJumpPending = false;
+      m_doubleJumpTime = 0.0f;
+      return;
+    }
+
     if (IsOnFloor() || IsOnLadder() || IsInWater())
       SetProcess(Process::Pause, "waiting a bit for next jump", true,
                  currentTime + crandomfloat(0.1f, 0.35f));
@@ -936,7 +940,7 @@ void Bot::DoWaypointNav(void) {
         } else {
           MoveTo(center, false);
           if (IsOnFloor() &&
-              pev->velocity.GetLength2D() < (pev->maxspeed * 0.5f))
+              pev->velocity.GetLengthSquared2D() < squaredf(pev->maxspeed * 0.5f))
             m_buttons |= IN_JUMP;
         }
       } else {
@@ -2676,31 +2680,52 @@ bool Bot::TryAvoidUpcomingPathZombie(void) {
   return true;
 }
 
+bool IsBreakableTarget(edict_t* ent, bool nativeOnly)
+{
+    if (FNullEnt(ent))
+        return false;
+
+    if (ent->v.takedamage == DAMAGE_NO) //can't take damage
+        return false;
+
+    if (ent->v.flags & FL_WORLDBRUSH)
+        return false;
+
+    //  if (entity->v.impulse) //Explode Magnitude (0=none)
+//      return;
+
+    if (ent->v.spawnflags & SF_BREAK_TRIGGER_ONLY)
+        return false;
+
+    const float healthLimit = ebot_breakable_health_limit.GetFloat();
+    const float health = ent->v.health;
+    if (health <= 0.0f || health >= healthLimit)
+        return false;
+
+    if (!nativeOnly && ebot_custom_breakables.GetBool()) //don't care about classname
+        return true;
+
+    if (IsBreakableDamageClass(ent))
+        return true;
+
+    return false;
+}
+
 void Bot::CheckTouchEntity(edict_t* entity) {
     if (FNullEnt(entity) || !m_isAlive)
         return;
 
-    if (entity == m_ignoreEntity)
-        return;
-
-    if (entity->v.takedamage == DAMAGE_NO)
-        return;
-
-    const float healthLimit = ebot_breakable_health_limit.GetFloat();
-    const float health = entity->v.health;
-    if (health <= 0.0f || health >= healthLimit)
+    const int entityIndex = ENTINDEX(entity);
+    if (entityIndex > 0 && entityIndex <= g_maxClients) //ignore players
         return;
 
     if (m_currentProcess == Process::DestroyBreakable && m_breakableEntity == entity)
         return;
 
-    const bool builtInBreakable =
-        FClassnameIs(entity, "func_breakable") ||
-        (FClassnameIs(entity, "func_pushable") &&
-            (entity->v.spawnflags & SF_PUSH_BREAKABLE)) ||
-        FClassnameIs(entity, "func_wall");
-    if (!builtInBreakable &&
-        !IsExtraTouchBreakableClass(STRING(entity->v.classname)))
+    if (entity == m_ignoreEntity)
+        return;
+
+    if (!IsBreakableTarget(entity))
         return;
 
     TraceResult tr;
@@ -3396,10 +3421,7 @@ void Bot::CheckStuck(const Vector &directionNormal, const float finterval) {
     if (m_stuckTime < 0.0f)
       m_stuckTime = 0.0f;
 
-    // boosting improve
-    if (m_isZombieBot && m_waypoint.flags & WAYPOINT_DJUMP && IsOnFloor() &&
-        ((pev->origin - m_waypoint.origin).GetLengthSquared() <
-         squaredf(54.0f)))
+    if (m_duckTime > engine->GetTime())
       m_buttons |= IN_DUCK;
     else {
       if (m_probeTime + 1.0f < engine->GetTime())
@@ -3434,7 +3456,8 @@ void Bot::ResetCollideState(void) {
 }
 
 void Bot::SetWaypointOrigin(void) {
-  if (m_currentTravelFlags & PATHFLAG_JUMP ||
+  const bool doubleJumpBoostReady = HasDuckingTeammateOnDoubleJumpSource(this);
+  if (m_currentTravelFlags & PATHFLAG_JUMP || doubleJumpBoostReady ||
       m_waypoint.flags & WAYPOINT_FALLRISK || m_isStuck) {
     m_waypointOrigin = m_waypoint.origin;
     if (!IsOnLadder() && !IsInWater()) {
@@ -3449,7 +3472,7 @@ void Bot::SetWaypointOrigin(void) {
       }
     }
 
-    if (m_currentTravelFlags & PATHFLAG_JUMP)
+    if ((m_currentTravelFlags & PATHFLAG_JUMP) || doubleJumpBoostReady)
       m_jumpReady = true;
   } else if (m_waypoint.radius) {
     const float radius = static_cast<float>(m_waypoint.radius);
